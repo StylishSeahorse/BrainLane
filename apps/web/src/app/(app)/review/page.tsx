@@ -39,9 +39,10 @@ export default async function ReviewPage() {
 
   return (
     <>
-      <PageHeader title="Review" subtitle="The last seven days, as patterns rather than a score." />
+      <PageHeader eyebrow="Last seven days"
+        title="Review" subtitle="The last seven days, as patterns rather than a score." />
 
-      <div className="stats stats-vertical bg-base-100 border-base-300 w-full border shadow-sm sm:stats-horizontal">
+      <div className="stats stats-vertical bg-base-100 border-base-200 w-full border shadow-sm sm:stats-horizontal">
         <div className="stat">
           <div className="stat-title">Finished</div>
           <div className="stat-value text-3xl">{completed}</div>
@@ -61,7 +62,7 @@ export default async function ReviewPage() {
 
       <SectionTitle>How your estimates are landing</SectionTitle>
 
-      <div className="card bg-base-100 border-base-300 border shadow-sm">
+      <div className="card bg-base-100 border-base-200 border shadow-sm">
         <div className="card-body gap-4">
           {accuracy.sampleCount === 0 ? (
             <div className="py-6 text-center">

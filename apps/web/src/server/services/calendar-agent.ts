@@ -49,6 +49,23 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
   const now = new Date();
   const batchId = crypto.randomUUID();
 
+  // Supersede any draft plan still awaiting a decision.
+  //
+  // `plan.build` and this function are two writers over the same table: the
+  // former leaves PROPOSED blocks pending a yes/no, the latter produces the
+  // authoritative schedule. Without this, running both stacks two copies of
+  // every block — one proposed, one accepted — and the calendar shows the same
+  // task twice at different times. The agent's plan wins; stale drafts go.
+  await prisma.$transaction([
+    prisma.planVersion.updateMany({
+      where: { userId, status: 'PROPOSED' },
+      data: { status: 'SUPERSEDED', respondedAt: now },
+    }),
+    prisma.scheduledBlock.deleteMany({
+      where: { task: { userId }, state: 'PROPOSED', isPinned: false },
+    }),
+  ]);
+
   const [user, tasks, workingHours, energyWindows, protectedTimes, externalEvents, blocks] =
     await Promise.all([
       prisma.user.findUniqueOrThrow({

@@ -1,72 +1,135 @@
 /**
  * Inline SVG icons.
  *
- * Inline rather than an icon package: the CSP forbids external origins, and
- * six small paths are cheaper than pulling in a library and its tree-shaking
- * caveats. Every icon is `aria-hidden` — the adjacent text is the label.
+ * Inline rather than a package: the CSP forbids external origins, and a handful
+ * of paths is cheaper than a dependency. Every icon is `aria-hidden` — the text
+ * beside it is the label.
  */
-const base = {
-  width: 20,
-  height: 20,
+const stroke = {
   viewBox: '0 0 24 24',
   fill: 'none',
   stroke: 'currentColor',
-  strokeWidth: 1.8,
+  strokeWidth: 1.7,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
   'aria-hidden': true,
 };
 
-export const TodayIcon = () => (
-  <svg {...base}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5l3 2" />
+type IconProps = { className?: string };
+
+const size = (className?: string) => className ?? 'size-[18px]';
+
+export const TodayIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <rect x="3" y="5" width="18" height="15" rx="3" />
+    <path d="M3 10h18" />
   </svg>
 );
 
-export const TasksIcon = () => (
-  <svg {...base}>
-    <path d="M9 6h11M9 12h11M9 18h11" />
-    <path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
-  </svg>
-);
-
-export const CalendarIcon = () => (
-  <svg {...base}>
-    <rect x="3" y="5" width="18" height="16" rx="2" />
+export const CalendarIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <rect x="3" y="5" width="18" height="16" rx="3" />
     <path d="M3 10h18M8 3v4M16 3v4" />
   </svg>
 );
 
-export const ActivityIcon = () => (
-  <svg {...base}>
+export const ProjectsIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M10 7h10M10 12h10M10 17h10" />
+    <path d="M4 6.5l1.2 1.2L7.5 5.4M4 16.5l1.2 1.2 2.3-2.3" />
+    <circle cx="5.2" cy="12" r="1" />
+  </svg>
+);
+
+export const TasksIcon = ProjectsIcon;
+
+export const ActivityIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
     <path d="M3 12h4l3 8 4-16 3 8h4" />
   </svg>
 );
 
-export const ReviewIcon = () => (
-  <svg {...base}>
+export const ReviewIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
     <path d="M4 19V5M4 19h16" />
-    <rect x="7" y="11" width="3" height="5" />
-    <rect x="13" y="7" width="3" height="9" />
+    <path d="M8 15v-3M13 15V8M18 15v-5" />
   </svg>
 );
 
-export const SettingsIcon = () => (
-  <svg {...base}>
+export const SettingsIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
     <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
+    <path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-2.5 1V21a2 2 0 1 1-4 0v-.2a1.5 1.5 0 0 0-2.5-1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0-1-2.5H3a2 2 0 1 1 0-4h.2a1.5 1.5 0 0 0 1-2.5l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 2.5-1V3a2 2 0 1 1 4 0v.2a1.5 1.5 0 0 0 2.5 1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0 1 2.5H21a2 2 0 1 1 0 4h-.2a1.5 1.5 0 0 0-1.7 1.1z" />
   </svg>
 );
 
-export const MenuIcon = () => (
-  <svg {...base} width={22} height={22}>
+export const MenuIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-5'}>
     <path d="M4 6h16M4 12h16M4 18h16" />
   </svg>
 );
 
-export const SparkIcon = () => (
-  <svg {...base} width={16} height={16}>
-    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
+/** The "plan my week" wand. */
+export const WandIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-4'}>
+    <path d="M15 4V2M15 10V8M12.5 6h-2M19.5 6h-2" />
+    <path d="M13.4 8.6 3 19l2 2L15.4 10.6z" />
+  </svg>
+);
+
+export const RefreshIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-[18px]'}>
+    <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+  </svg>
+);
+
+export const ArrowRightIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-4'}>
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </svg>
+);
+
+export const ColumnsIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-4'}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16M15 4v16" />
+  </svg>
+);
+
+export const ListIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-4'}>
+    <path d="M9 6h11M9 12h11M9 18h11" />
+    <circle cx="4.5" cy="6" r="1" />
+    <circle cx="4.5" cy="12" r="1" />
+    <circle cx="4.5" cy="18" r="1" />
+  </svg>
+);
+
+/** Sits beside the "no shame zone" note. */
+export const LeafIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-4'}>
+    <path d="M11 20A7 7 0 0 1 4 13c0-5 4-9 16-9 0 8-3 13-9 13z" />
+    <path d="M4 21c2-6 5-9 9-11" />
+  </svg>
+);
+
+export const DotsIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-4'}>
+    <circle cx="5" cy="12" r="1.4" />
+    <circle cx="12" cy="12" r="1.4" />
+    <circle cx="19" cy="12" r="1.4" />
+  </svg>
+);
+
+/** Logo mark: a node with branches — planning, not a brain cliché. */
+export const LogoMark = ({ className }: IconProps) => (
+  <svg {...stroke} strokeWidth={1.6} className={className ?? 'size-5'}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 9V4.5M12 15v4.5M9 12H4.5M15 12h4.5" />
+    <circle cx="12" cy="3.2" r="1.2" />
+    <circle cx="12" cy="20.8" r="1.2" />
+    <circle cx="3.2" cy="12" r="1.2" />
+    <circle cx="20.8" cy="12" r="1.2" />
   </svg>
 );

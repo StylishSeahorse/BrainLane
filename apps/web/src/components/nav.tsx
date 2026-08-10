@@ -7,28 +7,48 @@ export interface NavItem {
   href: string;
   label: string;
   icon: React.ReactNode;
+  badge?: number;
 }
 
-/**
- * `aria-current="page"` alongside the visual highlight: screen-reader users get
- * the same "you are here" signal sighted users get from the colour.
- */
 function useActive(href: string): boolean {
   const pathname = usePathname();
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-/** Sidebar entry, shown from `lg` upwards. */
+/**
+ * Sidebar entry.
+ *
+ * `aria-current="page"` alongside the fill: screen-reader users get the same
+ * "you are here" signal sighted users get from the colour.
+ */
 export function SidebarLink({ item }: { item: NavItem }) {
   const active = useActive(item.href);
 
   return (
-    <li>
-      <Link href={item.href} aria-current={active ? 'page' : undefined} className={active ? 'menu-active font-semibold' : ''}>
-        <span aria-hidden="true">{item.icon}</span>
-        {item.label}
-      </Link>
-    </li>
+    <Link
+      href={item.href}
+      aria-current={active ? 'page' : undefined}
+      className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[0.94rem] transition-colors ${
+        active
+          ? 'bg-primary/10 text-primary font-semibold'
+          : 'text-base-content/70 hover:bg-base-200 hover:text-base-content font-medium'
+      }`}
+    >
+      <span aria-hidden="true" className={active ? 'text-primary' : 'text-base-content/45'}>
+        {item.icon}
+      </span>
+      <span className="grow">{item.label}</span>
+
+      {item.badge ? (
+        <span
+          className={`min-w-6 rounded-full px-1.5 py-0.5 text-center text-xs font-semibold ${
+            active ? 'bg-primary text-primary-content' : 'bg-base-200 text-base-content/60'
+          }`}
+        >
+          {item.badge}
+        </span>
+      ) : null}
+    </Link>
   );
 }
 
@@ -43,7 +63,11 @@ export function DockLink({ item }: { item: NavItem }) {
   const active = useActive(item.href);
 
   return (
-    <Link href={item.href} aria-current={active ? 'page' : undefined} className={active ? 'dock-active' : ''}>
+    <Link
+      href={item.href}
+      aria-current={active ? 'page' : undefined}
+      className={active ? 'dock-active text-primary' : 'text-base-content/60'}
+    >
       <span aria-hidden="true">{item.icon}</span>
       <span className="dock-label">{item.label}</span>
     </Link>

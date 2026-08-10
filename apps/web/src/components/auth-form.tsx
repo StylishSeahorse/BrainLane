@@ -46,7 +46,7 @@ export function AuthForm({ action, submitLabel, autoComplete, passwordHint }: Pr
         {passwordHint ? <p className="label text-xs">{passwordHint}</p> : null}
       </fieldset>
 
-      <button type="submit" className="btn btn-primary w-full" disabled={pending}>
+      <button type="submit" className="btn btn-primary w-full rounded-xl" disabled={pending}>
         {pending ? <span className="loading loading-spinner loading-sm" /> : null}
         {pending ? 'Working…' : submitLabel}
       </button>

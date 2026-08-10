@@ -18,7 +18,7 @@ export default async function SignupPage() {
           <p className="text-base-content/60 mt-1 text-sm">Create an account.</p>
         </div>
 
-        <div className="card bg-base-100 border-base-300 border shadow-sm">
+        <div className="card bg-base-100 border-base-200 border shadow-sm">
           <div className="card-body">
             <AuthForm
               action={signUp}

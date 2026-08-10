@@ -21,7 +21,7 @@ export function NewTaskForm({ projects }: { projects: Array<{ id: string; name: 
         await formAction(formData);
         formRef.current?.reset();
       }}
-      className="card bg-base-100 border-base-300 border shadow-sm"
+      className="card bg-base-100 border-base-200 border shadow-sm"
     >
       <div className="card-body gap-3">
         {state?.error ? (

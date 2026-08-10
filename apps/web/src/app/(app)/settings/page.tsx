@@ -39,10 +39,11 @@ export default async function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" subtitle="Reading, motion, and what the AI is allowed to do." />
+      <PageHeader eyebrow="Your workspace"
+        title="Settings" subtitle="Reading, motion, and what the AI is allowed to do." />
 
       <SectionTitle>Accessibility</SectionTitle>
-      <form action={updateAccessibility} className="card bg-base-100 border-base-300 border shadow-sm">
+      <form action={updateAccessibility} className="card bg-base-100 border-base-200 border shadow-sm">
         <div className="card-body gap-1">
           {[
             { name: 'highContrast', label: 'High contrast', on: preferences?.highContrast },
@@ -66,7 +67,7 @@ export default async function SettingsPage() {
           ))}
 
           <div className="card-actions mt-2">
-            <button type="submit" className="btn btn-primary btn-sm">
+            <button type="submit" className="btn btn-primary btn-sm rounded-xl">
               Save
             </button>
           </div>
@@ -74,13 +75,13 @@ export default async function SettingsPage() {
       </form>
 
       <SectionTitle>How much the AI may do on its own</SectionTitle>
-      <form action={setAutonomy} className="card bg-base-100 border-base-300 border shadow-sm">
+      <form action={setAutonomy} className="card bg-base-100 border-base-200 border shadow-sm">
         <div className="card-body gap-4">
           <div className="space-y-2">
             {AUTONOMY_OPTIONS.map((option) => (
               <label
                 key={option.value}
-                className="border-base-300 hover:bg-base-200 flex cursor-pointer items-start gap-3 rounded-box border p-3"
+                className="border-base-200 hover:bg-base-200 flex cursor-pointer items-start gap-3 rounded-box border p-3"
               >
                 <input
                   type="radio"
@@ -135,7 +136,7 @@ export default async function SettingsPage() {
           </div>
 
           <div className="card-actions">
-            <button type="submit" className="btn btn-primary btn-sm">
+            <button type="submit" className="btn btn-primary btn-sm rounded-xl">
               Save
             </button>
           </div>
@@ -143,7 +144,7 @@ export default async function SettingsPage() {
       </form>
 
       <SectionTitle>AI and your data</SectionTitle>
-      <div className="card bg-base-100 border-base-300 border shadow-sm">
+      <div className="card bg-base-100 border-base-200 border shadow-sm">
         <div className="card-body gap-3">
           <p className="text-base-content/70 text-sm">
             {features.ai
@@ -195,7 +196,7 @@ export default async function SettingsPage() {
       </div>
 
       <SectionTitle>Calendars</SectionTitle>
-      <div className="card bg-base-100 border-base-300 border shadow-sm">
+      <div className="card bg-base-100 border-base-200 border shadow-sm">
         <div className="card-body">
           {connections.length === 0 ? (
             <p className="text-base-content/70 text-sm">

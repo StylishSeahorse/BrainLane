@@ -9,7 +9,7 @@ import {
 } from '@/app/actions';
 import { formatDay, formatDuration, formatTime, relativeDays } from '@/components/format';
 import { EnergyBadge, PageHeader, SectionTitle } from '@/components/page-header';
-import { SparkIcon } from '@/components/icons';
+import { WandIcon } from '@/components/icons';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
@@ -47,12 +47,13 @@ export default async function TodayPage() {
   return (
     <>
       <PageHeader
+        eyebrow="Right now"
         title="Today"
         subtitle={formatDay(now, timeZone)}
         action={
           <form action={rebuildPlan}>
-            <button type="submit" className="btn btn-sm btn-outline gap-1.5">
-              <SparkIcon />
+            <button type="submit" className="btn btn-sm btn-outline gap-1.5 rounded-xl">
+              <WandIcon />
               Re-plan
             </button>
           </form>
@@ -91,7 +92,7 @@ export default async function TodayPage() {
             <div className="card-actions">
               <form action={acceptPlanAction}>
                 <input type="hidden" name="planVersionId" value={pending.id} />
-                <button type="submit" className="btn btn-primary btn-sm">
+                <button type="submit" className="btn btn-primary btn-sm rounded-xl">
                   Accept
                 </button>
               </form>
@@ -110,7 +111,7 @@ export default async function TodayPage() {
       <SectionTitle>{current ? 'Right now' : 'Up next'}</SectionTitle>
 
       {focus ? (
-        <section className="card bg-base-100 border-base-300 border shadow-sm">
+        <section className="card bg-base-100 border-base-200 border shadow-sm">
           <div className="card-body gap-3">
             <div>
               <h3 className="text-lg font-semibold">{focus.task.title}</h3>
@@ -159,7 +160,7 @@ export default async function TodayPage() {
           </div>
         </section>
       ) : (
-        <div className="card bg-base-100 border-base-300 border">
+        <div className="card bg-base-100 border-base-200 border">
           <div className="card-body items-center py-10 text-center">
             <p className="font-medium">Nothing scheduled for the rest of today.</p>
             <p className="text-base-content/50 text-sm">That is allowed.</p>
@@ -171,7 +172,7 @@ export default async function TodayPage() {
       {runway.length > 0 ? (
         <>
           <SectionTitle>Runway</SectionTitle>
-          <div className="card bg-base-100 border-base-300 border shadow-sm">
+          <div className="card bg-base-100 border-base-200 border shadow-sm">
             <div className="card-body gap-4">
               <p className="text-base-content/50 text-xs">
                 Work sessions actually booked before each deadline — not days on a calendar.
@@ -196,8 +197,8 @@ export default async function TodayPage() {
                         )}
                         {item.sessionsBeforeDeadline === 0 ? (
                           <>
-                            <span className="border-base-300 h-2 w-6 rounded-sm border border-dashed" />
-                            <span className="border-base-300 h-2 w-6 rounded-sm border border-dashed" />
+                            <span className="border-base-200 h-2 w-6 rounded-sm border border-dashed" />
+                            <span className="border-base-200 h-2 w-6 rounded-sm border border-dashed" />
                           </>
                         ) : null}
                       </div>
@@ -229,7 +230,7 @@ export default async function TodayPage() {
           <SectionTitle>Worth a look</SectionTitle>
           <div className="space-y-3">
             {avoidance.map((task) => (
-              <section key={task.id} className="card bg-base-100 border-base-300 border shadow-sm">
+              <section key={task.id} className="card bg-base-100 border-base-200 border shadow-sm">
                 <div className="card-body gap-2">
                   <h3 className="font-semibold">{task.title}</h3>
 
@@ -269,7 +270,7 @@ export default async function TodayPage() {
       {blocks.length > 1 ? (
         <>
           <SectionTitle>Rest of today</SectionTitle>
-          <ul className="card bg-base-100 border-base-300 divide-base-200 divide-y border shadow-sm">
+          <ul className="card bg-base-100 border-base-200 divide-base-200 divide-y border shadow-sm">
             {blocks
               .filter((block) => block.id !== focus?.id)
               .map((block) => (

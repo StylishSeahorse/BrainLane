@@ -1,30 +1,49 @@
 import { localDayOfWeek, startOfLocalDay, toLocal } from '@fluid/core';
 import { rebuildPlan } from '@/app/actions';
 import { formatTime } from '@/components/format';
-import { PageHeader, SectionTitle } from '@/components/page-header';
-import { SparkIcon } from '@/components/icons';
+import {
+  Banner,
+  EmptyState,
+  PageHeader,
+  SegmentedNav,
+} from '@/components/page-header';
+import { ColumnsIcon, ListIcon, RefreshIcon, WandIcon } from '@/components/icons';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
 export const dynamic = 'force-dynamic';
 
-const DAY_START_HOUR = 7;
-const DAY_END_HOUR = 21;
-const HOURS = DAY_END_HOUR - DAY_START_HOUR;
+/** Fallback window. Widened below if anything actually falls outside it. */
+const DEFAULT_START_HOUR = 9;
+const DEFAULT_END_HOUR = 19;
+const HARD_MIN_HOUR = 6;
+const HARD_MAX_HOUR = 23;
+
+interface Span {
+  startsAt: Date;
+  endsAt: Date;
+}
 
 /**
- * Every date calculation here runs in the *user's* timezone via `@fluid/core`,
- * never through `Date`'s local-time getters.
+ * Choose the visible hours from the data.
  *
- * Mixing the two is subtly wrong rather than obviously broken: the server's
- * local midnight is a different instant from the user's, so a block lands in
- * the neighbouring column and the weekday label disagrees with the date beside
- * it. These are the same DST-tested helpers the scheduler uses.
+ * A fixed 7am–9pm grid spends half its height on rows nobody uses, which pushes
+ * the actual working day into a cramped strip. Fitting the window to the week's
+ * content keeps blocks large enough to read — and large enough to tap.
  */
-function offsetPercent(date: Date, timeZone: string): number {
-  const local = toLocal(date, timeZone);
-  const minutes = local.hour * 60 + local.minute - DAY_START_HOUR * 60;
-  return Math.max(0, Math.min(100, (minutes / (HOURS * 60)) * 100));
+function visibleHours(spans: Span[], timeZone: string): [number, number] {
+  let start = DEFAULT_START_HOUR;
+  let end = DEFAULT_END_HOUR;
+
+  for (const span of spans) {
+    const from = toLocal(span.startsAt, timeZone);
+    const to = toLocal(span.endsAt, timeZone);
+    start = Math.min(start, from.hour);
+    // Round the end upward so a block finishing at 17:30 does not clip.
+    end = Math.max(end, to.minute > 0 ? to.hour + 1 : to.hour);
+  }
+
+  return [Math.max(HARD_MIN_HOUR, start), Math.min(HARD_MAX_HOUR, Math.max(end, start + 4))];
 }
 
 function isSameLocalDay(a: Date, b: Date, timeZone: string): boolean {
@@ -33,10 +52,15 @@ function isSameLocalDay(a: Date, b: Date, timeZone: string): boolean {
   return left.year === right.year && left.month === right.month && left.day === right.day;
 }
 
-export default async function CalendarPage() {
+export default async function CalendarPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const user = await requireUser();
   const timeZone = user.timeZone;
   const caller = await getCaller();
+  const view = (await searchParams).view === 'agenda' ? 'agenda' : 'week';
 
   const now = new Date();
   const todayStart = startOfLocalDay(now, timeZone);
@@ -45,167 +69,294 @@ export default async function CalendarPage() {
   const weekEnd = startOfLocalDay(weekStart, timeZone, 7);
 
   const { blocks, events } = await caller.plan.blocks({ from: weekStart, to: weekEnd });
-  const days = Array.from({ length: 7 }, (_, index) => startOfLocalDay(weekStart, timeZone, index));
+  const connections = await caller.agent.autonomy();
+
+  const allDays = Array.from({ length: 7 }, (_, index) => startOfLocalDay(weekStart, timeZone, index));
+
+  // Weekdays always; a weekend column only when something is actually on it.
+  // Five columns are far more readable than seven, and most weeks have nothing
+  // on Saturday — showing empty columns just to be symmetrical costs width.
+  const days = allDays.filter((day, index) => {
+    if (index < 5) return true;
+    return (
+      blocks.some((block) => isSameLocalDay(block.startsAt, day, timeZone)) ||
+      events.some((event) => isSameLocalDay(event.startsAt, day, timeZone))
+    );
+  });
+
+  const [startHour, endHour] = visibleHours([...blocks, ...events], timeZone);
+  const totalHours = endHour - startHour;
+
+  const offsetPercent = (date: Date): number => {
+    const local = toLocal(date, timeZone);
+    const minutes = local.hour * 60 + local.minute - startHour * 60;
+    return Math.max(0, Math.min(100, (minutes / (totalHours * 60)) * 100));
+  };
+
+  const hourLabels = Array.from({ length: totalHours + 1 }, (_, index) => startHour + index).filter(
+    (hour) => (hour - startHour) % 2 === 0,
+  );
+
+  const formatHour = (hour: number) =>
+    `${((hour + 11) % 12) + 1} ${hour < 12 || hour === 24 ? 'AM' : 'PM'}`;
 
   return (
     <>
       <PageHeader
-        title="This week"
-        subtitle="Solid blocks are scheduled work. Hatched are proposals waiting on you. Grey comes from your connected calendars."
+        eyebrow="Your week"
+        title="Calendar"
         action={
-          <form action={rebuildPlan}>
-            <button type="submit" className="btn btn-sm btn-outline gap-1.5">
-              <SparkIcon />
-              Re-plan
-            </button>
-          </form>
+          <>
+            <SegmentedNav
+              current={view}
+              options={[
+                { value: 'week', label: 'Week', href: '/calendar', icon: <ColumnsIcon /> },
+                { value: 'agenda', label: 'Agenda', href: '/calendar?view=agenda', icon: <ListIcon /> },
+              ]}
+            />
+            <form action={rebuildPlan}>
+              <button type="submit" className="btn btn-primary gap-2 rounded-xl">
+                <WandIcon />
+                Plan my week
+              </button>
+            </form>
+          </>
         }
       />
 
-      {/*
-        The grid is desktop-only. On a phone it would be seven 40px columns of
-        unreadable text, so small screens get the list below — which is the same
-        data, not a degraded version of it.
-      */}
-      <div className="card bg-base-100 border-base-300 hidden overflow-hidden border shadow-sm lg:block">
-        <div className="grid grid-cols-[3rem_repeat(7,1fr)]">
-          <div className="bg-base-200 border-base-300 border-b" />
-          {days.map((day) => {
-            const local = toLocal(day, timeZone);
-            const isToday = isSameLocalDay(day, now, timeZone);
-            return (
-              <div
-                key={day.toISOString()}
-                className={`border-base-300 border-b border-l py-2 text-center text-xs font-semibold ${
-                  isToday ? 'bg-primary/10 text-primary' : 'bg-base-200'
-                }`}
-              >
-                {new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone }).format(day)}
-                <div className="text-base-content/50 font-normal">{local.day}</div>
-              </div>
-            );
-          })}
+      <Banner
+        icon={<RefreshIcon />}
+        lead="Planner calendar ready."
+        action={{ href: '/settings', label: 'Connect Google' }}
+      >
+        Connect Google in Settings to merge live commitments and deliver these blocks.
+        {connections.scope === 'TODAY'
+          ? ' The AI is currently limited to rearranging today.'
+          : ' The AI may rearrange this whole week.'}
+      </Banner>
 
-          <div className="bg-base-200 border-base-300 relative border-r">
-            {Array.from({ length: HOURS + 1 }, (_, index) => (
-              <span
-                key={index}
-                className="text-base-content/40 absolute right-1.5 -translate-y-1/2 text-[0.65rem]"
-                style={{ top: `${(index / HOURS) * 100}%` }}
-              >
-                {String(DAY_START_HOUR + index).padStart(2, '0')}
-              </span>
-            ))}
-          </div>
-
-          {days.map((day) => {
-            const dayBlocks = blocks.filter((block) => isSameLocalDay(block.startsAt, day, timeZone));
-            const dayEvents = events.filter((event) => isSameLocalDay(event.startsAt, day, timeZone));
-
-            return (
-              <div key={day.toISOString()} className="cal-col border-base-300 border-l">
-                {Array.from({ length: HOURS + 1 }, (_, index) => (
-                  <div key={index} className="cal-line" style={{ top: `${(index / HOURS) * 100}%` }} />
-                ))}
-
-                {/* External events sit underneath — context, not the plan. */}
-                {dayEvents.map((event) => {
-                  const top = offsetPercent(event.startsAt, timeZone);
-                  const height = Math.max(2, offsetPercent(event.endsAt, timeZone) - top);
-                  return (
-                    <div
-                      key={event.id}
-                      className="cal-evt bg-base-200 border-base-300 text-base-content/70"
-                      style={{ top: `${top}%`, height: `${height}%` }}
-                      title={`${event.title} · ${formatTime(event.startsAt, timeZone)}`}
-                    >
-                      <div className="truncate font-semibold">{event.title}</div>
-                    </div>
-                  );
-                })}
-
-                {dayBlocks.map((block) => {
-                  const top = offsetPercent(block.startsAt, timeZone);
-                  const height = Math.max(2, offsetPercent(block.endsAt, timeZone) - top);
-                  const proposed = block.state === 'PROPOSED';
-                  return (
-                    <div
-                      key={block.id}
-                      className={`cal-evt bg-primary/10 border-primary text-primary ${proposed ? 'cal-evt-proposed' : ''}`}
-                      style={{ top: `${top}%`, height: `${height}%` }}
-                      title={`${block.task.title} · ${formatTime(block.startsAt, timeZone)}–${formatTime(block.endsAt, timeZone)}`}
-                    >
-                      <div className="truncate font-semibold">{block.task.title}</div>
-                      <div className="opacity-70">{formatTime(block.startsAt, timeZone)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/*
-        Always rendered, not hidden behind a toggle. The grid is hard to read
-        with a screen reader and impossible on a phone; this is the accessible
-        equivalent rather than a fallback.
-      */}
-      <SectionTitle>By day</SectionTitle>
-
-      {blocks.length === 0 ? (
-        <div className="card bg-base-100 border-base-300 border">
-          <div className="card-body items-center py-10 text-center">
-            <p className="font-medium">Nothing scheduled this week yet.</p>
-            <p className="text-base-content/50 text-sm">Try “Re-plan”.</p>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {days.map((day) => {
-            const dayBlocks = blocks.filter((block) => isSameLocalDay(block.startsAt, day, timeZone));
-            if (dayBlocks.length === 0) return null;
-            const isToday = isSameLocalDay(day, now, timeZone);
-
-            return (
-              <section
-                key={day.toISOString()}
-                className="card bg-base-100 border-base-300 border shadow-sm"
-              >
-                <div className="card-body gap-0 p-0">
-                  <h3
-                    className={`border-base-200 border-b px-5 py-2.5 text-sm font-semibold ${
-                      isToday ? 'text-primary' : ''
-                    }`}
+      {blocks.length === 0 && events.length === 0 ? (
+        <EmptyState
+          title="Nothing scheduled this week yet."
+          hint="Add a few tasks, then press “Plan my week”."
+        />
+      ) : view === 'week' ? (
+        <>
+          {/* The grid is desktop-only: on a phone these become unreadable slivers. */}
+          <div className="card bg-base-100 border-base-200 hidden overflow-hidden border shadow-sm lg:block">
+            <div
+              className="grid"
+              style={{ gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))` }}
+            >
+              <div className="border-base-200 border-b" />
+              {days.map((day) => {
+                const local = toLocal(day, timeZone);
+                const isToday = isSameLocalDay(day, now, timeZone);
+                return (
+                  <div
+                    key={day.toISOString()}
+                    className="border-base-200 border-b border-l py-4 text-center"
                   >
-                    {new Intl.DateTimeFormat('en-GB', {
-                      weekday: 'long',
-                      day: 'numeric',
-                      month: 'short',
-                      timeZone,
-                    }).format(day)}
-                    {isToday ? <span className="badge badge-xs badge-primary ml-2">today</span> : null}
-                  </h3>
+                    <div
+                      className={`text-[0.65rem] font-semibold uppercase tracking-[0.12em] ${
+                        isToday ? 'text-primary' : 'text-base-content/40'
+                      }`}
+                    >
+                      {new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone }).format(day)}
+                    </div>
+                    <div
+                      className={`mt-1 text-2xl font-bold tracking-tight ${
+                        isToday ? 'text-primary' : ''
+                      }`}
+                    >
+                      {local.day}
+                    </div>
+                  </div>
+                );
+              })}
 
-                  <ul className="divide-base-200 divide-y">
-                    {dayBlocks.map((block) => (
-                      <li key={block.id} className="flex items-center gap-3 px-5 py-2.5">
-                        <span className="text-base-content/50 shrink-0 font-mono text-xs">
-                          {formatTime(block.startsAt, timeZone)}–{formatTime(block.endsAt, timeZone)}
-                        </span>
-                        <span className="min-w-0 grow truncate text-sm">{block.task.title}</span>
-                        {block.state === 'PROPOSED' ? (
-                          <span className="badge badge-xs badge-soft badge-warning">proposed</span>
-                        ) : null}
-                      </li>
+              <div className="relative" style={{ height: `${totalHours * 4}rem` }}>
+                {hourLabels.map((hour) => (
+                  <span
+                    key={hour}
+                    className="text-base-content/35 absolute right-2.5 -translate-y-1/2 text-[0.65rem] font-medium"
+                    style={{ top: `${((hour - startHour) / totalHours) * 100}%` }}
+                  >
+                    {formatHour(hour)}
+                  </span>
+                ))}
+              </div>
+
+              {days.map((day) => {
+                const dayBlocks = blocks.filter((block) =>
+                  isSameLocalDay(block.startsAt, day, timeZone),
+                );
+                const dayEvents = events.filter((event) =>
+                  isSameLocalDay(event.startsAt, day, timeZone),
+                );
+
+                return (
+                  <div
+                    key={day.toISOString()}
+                    className="cal-col border-base-200 border-l"
+                    style={{ height: `${totalHours * 4}rem` }}
+                  >
+                    {Array.from({ length: totalHours + 1 }, (_, index) => (
+                      <div
+                        key={index}
+                        className="cal-line"
+                        style={{ top: `${(index / totalHours) * 100}%` }}
+                      />
                     ))}
-                  </ul>
-                </div>
-              </section>
-            );
-          })}
-        </div>
+
+                    {dayEvents.map((event) => {
+                      const top = offsetPercent(event.startsAt);
+                      const height = Math.max(3, offsetPercent(event.endsAt) - top);
+                      return (
+                        <div
+                          key={event.id}
+                          className="cal-evt cal-evt-external"
+                          style={{ top: `${top}%`, height: `${height}%` }}
+                          title={`${event.title} · ${formatTime(event.startsAt, timeZone)}`}
+                        >
+                          <div className="text-base-content/50 text-[0.62rem]">
+                            {formatTime(event.startsAt, timeZone)}
+                          </div>
+                          <div className="text-base-content/80 truncate font-semibold">
+                            {event.title}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {dayBlocks.map((block) => {
+                      const top = offsetPercent(block.startsAt);
+                      const height = Math.max(3, offsetPercent(block.endsAt) - top);
+                      const proposed = block.state === 'PROPOSED';
+                      return (
+                        <div
+                          key={block.id}
+                          className={`cal-evt ${proposed ? 'cal-evt-proposed' : ''}`}
+                          style={{ top: `${top}%`, height: `${height}%` }}
+                          title={`${block.task.title} · ${formatTime(block.startsAt, timeZone)}–${formatTime(block.endsAt, timeZone)}`}
+                        >
+                          <div className="text-primary/70 text-[0.62rem]">
+                            {formatTime(block.startsAt, timeZone)}
+                          </div>
+                          <div className="line-clamp-2 font-semibold">{block.task.title}</div>
+                          <div className="text-base-content/40 mt-0.5 text-[0.6rem]">
+                            {proposed ? 'Awaiting your OK' : 'AI task block'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Phones get the agenda instead — same data, not a degraded grid. */}
+          <div className="lg:hidden">
+            <Agenda
+              days={allDays}
+              blocks={blocks}
+              timeZone={timeZone}
+              now={now}
+              isSameLocalDay={isSameLocalDay}
+            />
+          </div>
+        </>
+      ) : (
+        <Agenda
+          days={allDays}
+          blocks={blocks}
+          timeZone={timeZone}
+          now={now}
+          isSameLocalDay={isSameLocalDay}
+        />
       )}
     </>
+  );
+}
+
+/**
+ * Day-grouped list.
+ *
+ * Not a fallback — it is the accessible equivalent of the grid, and the only
+ * sensible layout on a phone. Absolutely-positioned columns are close to
+ * unusable with a screen reader.
+ */
+function Agenda({
+  days,
+  blocks,
+  timeZone,
+  now,
+  isSameLocalDay,
+}: {
+  days: Date[];
+  blocks: Array<{
+    id: string;
+    startsAt: Date;
+    endsAt: Date;
+    state: string;
+    task: { title: string; project: { name: string } | null };
+  }>;
+  timeZone: string;
+  now: Date;
+  isSameLocalDay: (a: Date, b: Date, timeZone: string) => boolean;
+}) {
+  const populated = days.filter((day) =>
+    blocks.some((block) => isSameLocalDay(block.startsAt, day, timeZone)),
+  );
+
+  if (populated.length === 0) {
+    return <EmptyState title="Nothing scheduled this week yet." hint="Try “Plan my week”." />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {populated.map((day) => {
+        const dayBlocks = blocks.filter((block) => isSameLocalDay(block.startsAt, day, timeZone));
+        const isToday = isSameLocalDay(day, now, timeZone);
+
+        return (
+          <section key={day.toISOString()} className="card bg-base-100 border-base-200 border shadow-sm">
+            <div className="card-body gap-0 p-0">
+              <h3 className="border-base-200 flex items-center gap-2 border-b px-5 py-3 text-sm font-semibold">
+                {new Intl.DateTimeFormat('en-GB', {
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'short',
+                  timeZone,
+                }).format(day)}
+                {isToday ? <span className="badge badge-sm badge-primary">today</span> : null}
+              </h3>
+
+              <ul className="divide-base-200 divide-y">
+                {dayBlocks.map((block) => (
+                  <li key={block.id} className="flex items-center gap-3 px-5 py-3">
+                    <span className="text-base-content/45 shrink-0 font-mono text-xs">
+                      {formatTime(block.startsAt, timeZone)}
+                    </span>
+                    <div className="min-w-0 grow">
+                      <div className="truncate text-sm font-medium">{block.task.title}</div>
+                      {block.task.project ? (
+                        <div className="text-base-content/40 truncate text-xs">
+                          {block.task.project.name}
+                        </div>
+                      ) : null}
+                    </div>
+                    {block.state === 'PROPOSED' ? (
+                      <span className="badge badge-sm badge-soft badge-warning shrink-0">proposed</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }

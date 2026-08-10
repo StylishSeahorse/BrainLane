@@ -6,7 +6,7 @@ import {
 } from '@/app/actions';
 import { formatTime } from '@/components/format';
 import { PageHeader } from '@/components/page-header';
-import { SparkIcon } from '@/components/icons';
+import { WandIcon } from '@/components/icons';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
@@ -58,6 +58,7 @@ export default async function ActivityPage() {
   return (
     <>
       <PageHeader
+        eyebrow="What the AI did"
         title="Activity"
         subtitle={
           <>
@@ -68,8 +69,8 @@ export default async function ActivityPage() {
         }
         action={
           <form action={reflowSchedule}>
-            <button type="submit" className="btn btn-sm btn-outline gap-1.5">
-              <SparkIcon />
+            <button type="submit" className="btn btn-sm btn-outline gap-1.5 rounded-xl">
+              <WandIcon />
               Let the AI reflow
             </button>
           </form>
@@ -77,7 +78,7 @@ export default async function ActivityPage() {
       />
 
       {actions.length === 0 ? (
-        <div className="card bg-base-100 border-base-300 border">
+        <div className="card bg-base-100 border-base-200 border">
           <div className="card-body items-center py-10 text-center">
             <p className="font-medium">The AI has not changed anything yet.</p>
             <p className="text-base-content/50 text-sm">
@@ -93,7 +94,7 @@ export default async function ActivityPage() {
               (!action.undoExpiresAt || action.undoExpiresAt.getTime() > now);
 
             return (
-              <li key={action.id} className="card bg-base-100 border-base-300 border shadow-sm">
+              <li key={action.id} className="card bg-base-100 border-base-200 border shadow-sm">
                 <div className="card-body gap-2 p-4 sm:p-5">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{KIND_LABEL[action.kind] ?? action.kind}</span>
