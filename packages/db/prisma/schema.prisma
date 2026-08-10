@@ -1,0 +1,1019 @@
+// Fluid — data model.
+//
+// Two conventions run through the whole schema and are worth stating once:
+//
+// 1. TIME. Every instant is stored as `timestamptz` (UTC) *alongside* the IANA
+//    timezone id it was authored in. You cannot reconstruct "9am local, every
+//    weekday" from a UTC instant alone once DST moves — so we keep both, and we
+//    never re-serialize a recurrence rule we did not author.
+//
+// 2. OWNERSHIP. `Event.origin` decides who is allowed to write an event.
+//    EXTERNAL events belong to the calendar provider; APP_BLOCK events are ours.
+//    The scheduler may only ever touch APP_BLOCK rows. This is enforced in the
+//    repository layer *and* by a database check constraint, because a bug that
+//    deletes a user's real meetings is the one failure this product cannot
+//    survive.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  timeZone  String   @default("UTC") // IANA id, e.g. "Europe/London"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Argon2id PHC string. Nullable so SSO-only accounts remain possible later.
+  passwordHash String?
+
+  // Accessibility and nudge preferences live on the user because they must
+  // apply before any data loads — see UserPreferences for the rest.
+  preferences         UserPreferences?
+  sessions            Session[]
+  projects            Project[]
+  tasks               Task[]
+  calendarConnections CalendarConnection[]
+  calendars           Calendar[]
+  workingHours        WorkingHours[]
+  energyWindows       EnergyWindow[]
+  protectedTimes      ProtectedTime[]
+  planVersions        PlanVersion[]
+  estimateSamples     TimeEstimateSample[]
+  aiSetting           AiSetting?
+  aiActions           AiAction[]
+  auditLogs           AuditLog[]
+
+  @@map("users")
+}
+
+/// Opaque, database-backed sessions. We store only a SHA-256 digest of the
+/// token, so a database dump cannot be replayed as live logins.
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  tokenDigest String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  // Recorded for the "your active sessions" screen and for anomaly review.
+  // Deliberately coarse: user agent string and IP, nothing more.
+  userAgent String?
+  ipAddress String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+enum NudgeTone {
+  NEUTRAL
+  COACH
+  MINIMAL
+}
+
+/// How much freedom the user has granted the AI over their calendar.
+enum AutonomyLevel {
+  /// Act immediately; report afterwards.
+  FULL_AUTO
+  /// Act immediately, but keep a one-tap undo open.
+  AUTO_WITH_UNDO
+  /// Draft the change; write nothing until the user agrees.
+  PROPOSE_THEN_CONFIRM
+}
+
+/// The blast radius of a single autonomous pass.
+enum ActionScope {
+  TODAY
+  THIS_WEEK
+}
+
+model UserPreferences {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // --- Accessibility. Co-occurring conditions are common; these are defaults,
+  // --- not an afterthought behind a settings page nobody opens.
+  highContrast   Boolean @default(false)
+  reducedMotion  Boolean @default(false)
+  dyslexiaFont   Boolean @default(false)
+  largeText      Boolean @default(false)
+
+  // --- Scheduling behaviour
+  /// Minutes of breathing room inserted between scheduled blocks. Transitions
+  /// cost more for ADHD users than the calendar suggests.
+  bufferMinutes       Int     @default(10)
+  /// How long a plan diff waits before auto-accepting. 0 disables auto-accept
+  /// entirely — some people need the control, others need the decision made.
+  autoAcceptSeconds   Int     @default(30)
+  /// Cap on how much the scheduler may reshuffle in one replan. A schedule that
+  /// churns is a schedule users stop trusting.
+  maxDailyReshuffles  Int     @default(3)
+
+  // --- AI autonomy
+  /// How much freedom the AI has to change the calendar without being asked.
+  /// Defaults to the middle setting: it acts, but every action stays undoable
+  /// for a while. Full autonomy should be a decision, not a default.
+  aiAutonomy        AutonomyLevel @default(AUTO_WITH_UNDO)
+  /// How long the one-tap undo stays open, in seconds.
+  undoWindowSeconds Int           @default(30)
+  /// How much of the calendar one autonomous pass may rewrite.
+  aiActionScope     ActionScope   @default(TODAY)
+
+  // --- Nudges
+  nudgeTone     NudgeTone @default(NEUTRAL)
+  nudgesEnabled Boolean   @default(true)
+  quietHoursStart String? // "22:00" local
+  quietHoursEnd   String? // "08:00" local
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// ---------------------------------------------------------------------------
+// Calendar connections and events
+// ---------------------------------------------------------------------------
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+  CALDAV
+}
+
+enum ConnectionStatus {
+  ACTIVE
+  /// Sync paused pending user attention — expired credentials, or the deletion
+  /// circuit breaker tripped. We never keep writing to a connection we do not
+  /// understand the state of.
+  NEEDS_ATTENTION
+  /// User disconnected it; rows are retained so history stays readable.
+  DISCONNECTED
+}
+
+model CalendarConnection {
+  id       String           @id @default(cuid())
+  userId   String
+  provider CalendarProvider
+
+  /// Provider account identity, for display and for de-duplicating reconnects.
+  accountIdentifier String
+
+  /// Envelope-encrypted credential bundle (@fluid/crypto). Never a raw token.
+  encryptedCredentials String
+  /// Access-token expiry, so the worker can refresh ahead of time. The refresh
+  /// token itself lives inside encryptedCredentials.
+  accessTokenExpiresAt DateTime?
+
+  status         ConnectionStatus @default(ACTIVE)
+  /// Human-readable reason the connection needs attention. Surfaced verbatim in
+  /// the sync log — silent failure is what destroys trust in a sync product.
+  statusDetail   String?
+
+  lastSyncAt     DateTime?
+  lastSyncError  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendars   Calendar[]
+  syncLogs    SyncLog[]
+  pendingOps  PendingRemoteOp[]
+
+  @@unique([userId, provider, accountIdentifier])
+  @@index([status])
+  @@map("calendar_connections")
+}
+
+model Calendar {
+  id           String @id @default(cuid())
+  connectionId String
+  /// Denormalized from the connection. Present so "exactly one write-target
+  /// calendar per user" can be a database constraint rather than a convention —
+  /// a partial unique index cannot reach across a join. Kept in step by the
+  /// repository, which is the only writer.
+  userId       String
+
+  externalId String
+  name       String
+  timeZone   String  @default("UTC")
+  color      String?
+
+  /// Whether the provider grants us write access. Read-only calendars must
+  /// never receive scheduled blocks — we check this before proposing writes.
+  canWrite   Boolean @default(false)
+  /// User chose to show this calendar's events as busy time.
+  isSelected Boolean @default(true)
+  /// Exactly one calendar per user receives app-created blocks. Partial unique
+  /// index enforcing this is added in the migration.
+  isWriteTarget Boolean @default(false)
+
+  // --- Incremental sync state -------------------------------------------------
+  /// Provider cursor: Google syncToken, Graph deltaLink, CalDAV ctag/sync-token.
+  /// Written in the SAME transaction as the batch it describes, so a crash
+  /// mid-batch rolls both back rather than skipping changes permanently.
+  syncCursor      String?
+  /// Set when the provider invalidates the cursor (Google 410 GONE). The next
+  /// run does a full snapshot reconciliation under the deletion circuit breaker.
+  needsFullResync Boolean @default(false)
+
+  // --- Push subscription (Google/Graph only; CalDAV polls) ---------------------
+  watchChannelId    String?
+  watchResourceId   String?
+  watchExpiresAt    DateTime?
+  /// Digest of the channel token we handed the provider, so a webhook can be
+  /// matched to a subscription without storing the token itself.
+  watchTokenDigest  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  connection CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events     Event[]
+  pendingOps PendingRemoteOp[]
+  conflicts  SyncConflict[]
+
+  @@unique([connectionId, externalId])
+  @@index([watchChannelId])
+  @@index([userId])
+  @@map("calendars")
+}
+
+/// Who authored an event, and therefore who is allowed to change it.
+enum EventOrigin {
+  /// Came from the provider. Remote is the authority; we only write on a
+  /// deliberate user edit, guarded by an ETag precondition.
+  EXTERNAL
+  /// A block we created for a scheduled task. We are the authority.
+  APP_BLOCK
+}
+
+enum EventStatus {
+  CONFIRMED
+  TENTATIVE
+  CANCELLED
+}
+
+/// Whether an event consumes schedulable time.
+enum EventTransparency {
+  BUSY
+  FREE
+}
+
+model Event {
+  id         String @id @default(cuid())
+  calendarId String
+
+  // --- Provider identity ------------------------------------------------------
+  /// Provider's own id. Null only for a block created locally that has not yet
+  /// been pushed (the outbox has not drained).
+  externalId String?
+  /// Deterministic for app-created blocks: `fluid-<blockId>@fluid.local`.
+  /// This is what makes a retried create idempotent — on a duplicate we look up
+  /// by UID instead of creating a second event.
+  iCalUid    String?
+  /// Provider version marker. Sent as an If-Match precondition on update, so a
+  /// concurrent remote edit produces a 412 rather than a silent overwrite.
+  etag       String?
+  sequence   Int?
+
+  // --- Content ----------------------------------------------------------------
+  title       String
+  description String?
+  location    String?
+
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt   DateTime @db.Timestamptz(3)
+  isAllDay Boolean  @default(false)
+  /// IANA id the times were authored in. Required to reconstruct local intent
+  /// across DST boundaries.
+  timeZone String   @default("UTC")
+
+  // --- Recurrence -------------------------------------------------------------
+  /// RFC 5545 RRULE lines, stored VERBATIM. We never re-emit a rule we did not
+  /// author; round-tripping through a parser is how timezone corruption and
+  /// silent series rewrites happen.
+  rrule            String?
+  /// Set on a modified instance, pointing at its master event.
+  recurringEventId String?
+  /// Original start of this instance, identifying which occurrence it overrides.
+  originalStartsAt DateTime? @db.Timestamptz(3)
+
+  status       EventStatus       @default(CONFIRMED)
+  transparency EventTransparency @default(BUSY)
+  origin       EventOrigin
+
+  /// Soft delete. We never hard-delete on the strength of one sync result —
+  /// a tombstone is recoverable, a DELETE is not.
+  deletedAt DateTime?
+
+  /// Provider's last-modified time. Used for display and diagnostics only:
+  /// authority comes from `origin` and ETags, never from comparing wall clocks
+  /// across systems that do not share one.
+  remoteUpdatedAt DateTime?
+  localUpdatedAt  DateTime  @updatedAt
+  createdAt       DateTime  @default(now())
+
+  calendar       Calendar        @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  scheduledBlock ScheduledBlock?
+
+  @@unique([calendarId, externalId])
+  @@unique([calendarId, iCalUid])
+  @@index([calendarId, startsAt, endsAt])
+  @@index([origin])
+  @@index([deletedAt])
+  @@map("events")
+}
+
+// ---------------------------------------------------------------------------
+// Projects and tasks
+// ---------------------------------------------------------------------------
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  COMPLETED
+}
+
+model Project {
+  id     String @id @default(cuid())
+  userId String
+
+  name        String
+  description String?
+  color       String?
+  status      ProjectStatus @default(ACTIVE)
+
+  /// Rollup deadline. Individual task deadlines may be earlier, never later.
+  deadline DateTime? @db.Timestamptz(3)
+
+  /// Last time any task in this project was touched. Drives the "untouched for
+  /// X days" avoidance check without an aggregate query on every page load.
+  lastTouchedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks      Task[]
+  milestones Milestone[]
+
+  @@index([userId, status])
+  @@map("projects")
+}
+
+model Milestone {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  dueAt     DateTime @db.Timestamptz(3)
+  reachedAt DateTime?
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, dueAt])
+  @@map("milestones")
+}
+
+enum TaskStatus {
+  BACKLOG
+  READY
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// How much cognitive fuel a task needs. Matched against EnergyWindow so deep
+/// work does not get scheduled into a known low-focus slot.
+enum EnergyLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Task {
+  id        String  @id @default(cuid())
+  userId    String
+  projectId String?
+  /// Self-reference for subtasks. AI breakdown writes children here.
+  parentId  String?
+
+  title String
+  notes String?
+
+  status   TaskStatus  @default(BACKLOG)
+  priority Priority    @default(MEDIUM)
+  energy   EnergyLevel @default(MEDIUM)
+
+  // --- Time -------------------------------------------------------------------
+  /// What the user thinks it will take.
+  estimateMinutes Int @default(30)
+  /// What the estimation coach thinks it will take, from this user's own
+  /// history. Never overwrites the user's number — shown beside it.
+  adjustedEstimateMinutes Int?
+  /// Accumulated from completed focus sessions.
+  actualMinutes Int @default(0)
+
+  deadline      DateTime? @db.Timestamptz(3)
+  /// Do not schedule before this — waiting on someone, or simply not yet
+  /// relevant.
+  earliestStart DateTime? @db.Timestamptz(3)
+
+  // --- Chunking ---------------------------------------------------------------
+  /// May the scheduler split this across multiple sittings?
+  isSplittable    Boolean @default(true)
+  /// Shortest useful sitting. Below this, the setup cost exceeds the work done.
+  minChunkMinutes Int     @default(25)
+  /// Longest sitting before a break is more valuable than pushing on.
+  maxChunkMinutes Int     @default(90)
+
+  // --- ADHD signals -----------------------------------------------------------
+  /// Times this task has been moved by a replan or a user deferral. Three or
+  /// more is the avoidance-detection trigger.
+  rescheduleCount Int      @default(0)
+  /// Any interaction at all. Distinguishes "avoided" from "not yet reached".
+  lastTouchedAt   DateTime @default(now())
+  /// A low-friction entry point, generated on demand by "Just start".
+  starterStep     String?
+  /// Set when the user has acknowledged an avoidance check-in, so we ask about
+  /// this task once and then leave them alone.
+  avoidanceAcknowledgedAt DateTime?
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project  Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent   Task?    @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks Task[]   @relation("Subtasks")
+
+  blockedBy       TaskDependency[]     @relation("DependentTask")
+  blocks          TaskDependency[]     @relation("PrerequisiteTask")
+  scheduledBlocks ScheduledBlock[]
+  estimateSamples TimeEstimateSample[]
+
+  @@index([userId, status])
+  @@index([userId, deadline])
+  @@index([projectId])
+  @@index([parentId])
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id             String @id @default(cuid())
+  /// The task that must wait.
+  dependentId    String
+  /// The task that must finish first.
+  prerequisiteId String
+
+  createdAt DateTime @default(now())
+
+  dependent    Task @relation("DependentTask", fields: [dependentId], references: [id], onDelete: Cascade)
+  prerequisite Task @relation("PrerequisiteTask", fields: [prerequisiteId], references: [id], onDelete: Cascade)
+
+  @@unique([dependentId, prerequisiteId])
+  @@index([prerequisiteId])
+  @@map("task_dependencies")
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling
+// ---------------------------------------------------------------------------
+
+enum BlockState {
+  /// Part of a plan the user has not yet accepted. Nothing is pushed to the
+  /// calendar in this state.
+  PROPOSED
+  ACCEPTED
+  COMPLETED
+  /// User skipped it. Feeds avoidance detection.
+  SKIPPED
+}
+
+/// A period of work on a task, mirrored to the calendar as an APP_BLOCK event.
+model ScheduledBlock {
+  id     String @id @default(cuid())
+  taskId String
+
+  /// The mirroring calendar event. Null while PROPOSED, or if the user has no
+  /// calendar connected — the app is fully usable without one.
+  eventId String? @unique
+
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt   DateTime @db.Timestamptz(3)
+
+  state BlockState @default(PROPOSED)
+
+  /// The user moved this block by hand — in our UI or by dragging it in Google
+  /// Calendar. Treated as intent: the scheduler will not move it again.
+  isPinned Boolean @default(false)
+
+  /// Which plan produced this block, for the change diff.
+  planVersionId String?
+
+  /// Recorded when a focus session runs against this block, feeding
+  /// TimeEstimateSample.
+  actualMinutes Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task        Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  event       Event?       @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  planVersion PlanVersion? @relation(fields: [planVersionId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([startsAt, endsAt])
+  @@index([state])
+  @@map("scheduled_blocks")
+}
+
+enum PlanStatus {
+  /// Awaiting the user's confirmation, possibly with an auto-accept countdown.
+  PROPOSED
+  ACCEPTED
+  REJECTED
+  /// Superseded by a newer plan before the user responded.
+  SUPERSEDED
+}
+
+/// One run of the scheduler. Kept as a version rather than mutating in place so
+/// "here is what changed and why" is always answerable, and so a plan the user
+/// dislikes can be rolled back.
+model PlanVersion {
+  id     String @id @default(cuid())
+  userId String
+
+  status PlanStatus @default(PROPOSED)
+
+  /// What triggered this replan: "task_skipped", "external_event_conflict",
+  /// "new_urgent_task", "manual". Shown at the top of the diff.
+  trigger String
+
+  /// False when the AI was unavailable and the deterministic scheduler ran
+  /// alone. Surfaced in the UI — the user should know which one they are
+  /// looking at.
+  usedAi Boolean @default(false)
+
+  /// Set when the user did nothing and the countdown elapsed.
+  autoAcceptedAt DateTime?
+  respondedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  changes PlanChange[]
+  blocks  ScheduledBlock[]
+
+  @@index([userId, status])
+  @@map("plan_versions")
+}
+
+enum PlanChangeKind {
+  ADDED
+  MOVED
+  RESIZED
+  REMOVED
+  UNCHANGED
+}
+
+/// A single line in the plan diff, in plain language.
+model PlanChange {
+  id            String @id @default(cuid())
+  planVersionId String
+
+  kind   PlanChangeKind
+  taskId String
+
+  previousStartsAt DateTime? @db.Timestamptz(3)
+  previousEndsAt   DateTime? @db.Timestamptz(3)
+  newStartsAt      DateTime? @db.Timestamptz(3)
+  newEndsAt        DateTime? @db.Timestamptz(3)
+
+  /// Written for a human: "moved because a meeting landed on your Wednesday
+  /// block". Never "constraint 4 violated".
+  reason String
+
+  planVersion PlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+
+  @@index([planVersionId])
+  @@map("plan_changes")
+}
+
+// ---------------------------------------------------------------------------
+// Availability
+// ---------------------------------------------------------------------------
+
+/// Recurring weekly availability. Stored as local wall-clock time plus the
+/// user's timezone, because "I work 9–5" means 9–5 local on both sides of a
+/// DST change, not a fixed UTC offset.
+model WorkingHours {
+  id     String @id @default(cuid())
+  userId String
+
+  /// 0 = Sunday .. 6 = Saturday.
+  dayOfWeek Int
+  /// "09:00" local.
+  startTime String
+  endTime   String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dayOfWeek, startTime])
+  @@map("working_hours")
+}
+
+/// Known energy pattern, e.g. "low focus after 2pm". The scheduler matches
+/// Task.energy against these so demanding work lands where it has a chance.
+model EnergyWindow {
+  id     String @id @default(cuid())
+  userId String
+
+  dayOfWeek Int?  // null = every day
+  startTime String
+  endTime   String
+  level     EnergyLevel
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("energy_windows")
+}
+
+enum ProtectedTimeKind {
+  /// Breaks, meals, commute — recurring life.
+  ROUTINE
+  /// Deliberately unstructured. Not everything needs to be optimised.
+  BUFFER
+  /// Hyperfocus protection: an in-progress deep session the scheduler must not
+  /// schedule over, even for something urgent.
+  HYPERFOCUS
+}
+
+/// Time the scheduler may never allocate. This is the hard constraint —
+/// it outranks deadlines.
+model ProtectedTime {
+  id     String @id @default(cuid())
+  userId String
+
+  kind  ProtectedTimeKind @default(ROUTINE)
+  label String?
+
+  /// Recurring form.
+  dayOfWeek Int?
+  startTime String?
+  endTime   String?
+
+  /// One-off form, used for live hyperfocus protection.
+  startsAt DateTime? @db.Timestamptz(3)
+  endsAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("protected_times")
+}
+
+// ---------------------------------------------------------------------------
+// Learning: estimate vs actual
+// ---------------------------------------------------------------------------
+
+/// One completed observation of "you said X, it took Y". The estimation coach
+/// derives a per-category correction factor from these. ADHD users typically
+/// underestimate by a consistent multiple, which makes this learnable.
+model TimeEstimateSample {
+  id     String @id @default(cuid())
+  userId String
+  taskId String?
+
+  /// Free-text bucket ("writing", "email", "admin"). Coarse on purpose:
+  /// per-task history is too sparse to learn from.
+  category String
+
+  estimatedMinutes Int
+  actualMinutes    Int
+
+  recordedAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, category])
+  @@map("time_estimate_samples")
+}
+
+// ---------------------------------------------------------------------------
+// Sync machinery
+// ---------------------------------------------------------------------------
+
+enum RemoteOpKind {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+enum RemoteOpStatus {
+  PENDING
+  IN_FLIGHT
+  SUCCEEDED
+  FAILED
+  /// Abandoned after exhausting retries. Requires a human look; never silently
+  /// dropped.
+  DEAD_LETTER
+}
+
+/// Transactional outbox for calendar writes.
+///
+/// Writes are committed here in the same transaction as the local change, then
+/// drained by the worker. That gives at-least-once delivery; combined with the
+/// deterministic iCalUID on app-created events, the effective result is
+/// exactly-once — a retry that finds an existing UID adopts it instead of
+/// creating a duplicate.
+model PendingRemoteOp {
+  id           String @id @default(cuid())
+  connectionId String
+  calendarId   String
+
+  kind   RemoteOpKind
+  status RemoteOpStatus @default(PENDING)
+
+  /// Stable across retries. Unique, so a double-enqueue collapses into one op.
+  idempotencyKey String @unique
+
+  /// Local event this operation is about.
+  eventId String?
+  /// Provider id, when known (UPDATE/DELETE).
+  externalId String?
+  /// ETag to send as an If-Match precondition.
+  expectedEtag String?
+
+  /// Serialized event payload for CREATE/UPDATE.
+  payload Json?
+
+  attempts    Int       @default(0)
+  lastError   String?
+  /// Exponential backoff target.
+  nextAttemptAt DateTime @default(now())
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  connection CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  calendar   Calendar           @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([eventId])
+  @@map("pending_remote_ops")
+}
+
+enum SyncDirection {
+  PULL
+  PUSH
+}
+
+enum SyncOutcome {
+  SUCCESS
+  PARTIAL
+  FAILED
+  /// The deletion circuit breaker fired. Sync halted, nothing written.
+  CIRCUIT_BROKEN
+}
+
+/// Visible, user-facing sync history. Calendar sync failures must never be
+/// silent — a user who cannot see what happened cannot trust the tool with
+/// their calendar.
+model SyncLog {
+  id           String @id @default(cuid())
+  connectionId String
+
+  direction SyncDirection
+  outcome   SyncOutcome
+
+  eventsCreated Int @default(0)
+  eventsUpdated Int @default(0)
+  eventsDeleted Int @default(0)
+
+  /// Plain-language summary shown in the UI.
+  message String?
+  /// Structured detail for debugging: cursor values, provider status codes.
+  detail  Json?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  connection CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, startedAt])
+  @@map("sync_logs")
+}
+
+enum ConflictResolution {
+  /// Provider's version kept (the default for EXTERNAL events).
+  REMOTE_WON
+  /// Our version kept (the default for APP_BLOCK events).
+  LOCAL_WON
+  /// Remote edit of one of our blocks, accepted as user intent and pinned.
+  ACCEPTED_AS_INTENT
+  /// Waiting on the user.
+  UNRESOLVED
+}
+
+/// A recorded divergence between our copy and the provider's.
+///
+/// Both versions are stored in full. Whatever the resolution, the losing side
+/// remains recoverable — this is the difference between a conflict policy and
+/// data loss.
+model SyncConflict {
+  id         String @id @default(cuid())
+  calendarId String
+  eventId    String?
+
+  resolution ConflictResolution @default(UNRESOLVED)
+
+  localVersion  Json
+  remoteVersion Json
+
+  /// Why it resolved the way it did, for the sync log.
+  explanation String?
+
+  detectedAt DateTime  @default(now())
+  resolvedAt DateTime?
+  /// Set if the user clicked "restore" on the losing version.
+  revertedAt DateTime?
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([calendarId, resolution])
+  @@map("sync_conflicts")
+}
+
+// ---------------------------------------------------------------------------
+// AI configuration
+// ---------------------------------------------------------------------------
+
+enum AiProviderKind {
+  ANTHROPIC
+  OPENAI
+  GOOGLE
+  /// Ollama or any OpenAI-compatible endpoint, for users who want nothing
+  /// leaving their machine.
+  LOCAL
+}
+
+model AiSetting {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  provider AiProviderKind @default(ANTHROPIC)
+  /// Null falls back to the server's default model for that provider.
+  model    String?
+  /// Envelope-encrypted, purpose `ai-api-key`. Null uses the server key, if one
+  /// is configured.
+  encryptedApiKey String?
+  /// For LOCAL: the endpoint to talk to. Validated against the SSRF guard
+  /// before any request is made.
+  baseUrl String?
+
+  // --- Per-feature consent. Off by default is the wrong default for a feature
+  // --- people came for; on by default is the wrong default for their data. We
+  // --- split it: scheduling sees only structured metadata, so it is on;
+  // --- anything that reads the user's own words is opt-in.
+  allowScheduling     Boolean @default(true)
+  allowTaskBreakdown  Boolean @default(true)
+  allowAvoidanceCheck Boolean @default(false)
+  allowChat           Boolean @default(false)
+
+  /// Master switch: send titles and notes, not just structured metadata.
+  /// Off means the AI never sees the user's own words.
+  shareTaskText Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+enum AiActionKind {
+  CREATE_BLOCK
+  MOVE_BLOCK
+  RESIZE_BLOCK
+  DELETE_BLOCK
+}
+
+enum AiActionStatus {
+  /// Written to the calendar.
+  APPLIED
+  /// Drafted, awaiting the user. Nothing has changed yet.
+  PROPOSED
+  /// Applied, then undone.
+  REVERTED
+  /// Refused by the validator. Recorded so the reasoning is visible.
+  BLOCKED
+  /// The user declined a proposal.
+  REJECTED
+}
+
+/// Every change the AI made, or wanted to make, to the calendar.
+///
+/// This is the audit trail the brief requires, and the thing that makes
+/// autonomous scheduling feel like help rather than losing control of your own
+/// calendar. Three properties matter:
+///
+///   - Every entry carries a one-line `reason` in plain language.
+///   - Every applied entry stores `beforeState`, so any single action can be
+///     reverted individually — not just the most recent one.
+///   - Refusals are recorded too. A boundary the AI hit is information the user
+///     is entitled to see, and silently dropping it would hide the guardrail
+///     that did its job.
+model AiAction {
+  id     String @id @default(cuid())
+  userId String
+
+  kind   AiActionKind
+  status AiActionStatus
+
+  /// The block acted on. Null for a CREATE that was refused before it existed.
+  blockId String?
+  taskId  String?
+
+  /// Shown to the user: "moved to make room for your call".
+  reason String
+  /// Present when a boundary was hit, explaining which one and why.
+  explanation String?
+  /// The boundary name from the validator, for filtering and metrics.
+  boundary String?
+
+  /// Enough state to put things back exactly as they were.
+  beforeState Json?
+  afterState  Json?
+
+  /// The pass this action belonged to, so a whole reflow can be undone together.
+  batchId String?
+  scope   ActionScope @default(TODAY)
+
+  /// While this is in the future, the action is one tap from being undone.
+  undoExpiresAt DateTime?
+
+  createdAt  DateTime  @default(now())
+  revertedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([batchId])
+  @@map("ai_actions")
+}
+
+/// Security-relevant events: logins, credential changes, calendar connect and
+/// disconnect, AI setting changes. Deliberately not a general activity feed.
+model AuditLog {
+  id     String  @id @default(cuid())
+  userId String?
+
+  action   String
+  /// Never contains secrets or event content — identifiers and outcomes only.
+  metadata Json?
+
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}

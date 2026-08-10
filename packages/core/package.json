@@ -1,0 +1,12 @@
+{
+  "name": "@fluid/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./scheduler": "./src/scheduler/index.ts",
+    "./time": "./src/time/index.ts"
+  },
+  "dependencies": {}
+}

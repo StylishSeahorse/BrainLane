@@ -1,0 +1,58 @@
+export { prisma, type Db, type PrismaClient } from './client';
+
+// Re-export generated enums and types so consumers never import from the
+// generated directory directly — that path is an implementation detail and
+// changes when the generator config does.
+export {
+  Prisma,
+  BlockState,
+  CalendarProvider,
+  ConflictResolution,
+  ConnectionStatus,
+  EnergyLevel,
+  EventOrigin,
+  EventStatus,
+  EventTransparency,
+  AiProviderKind,
+  AiActionKind,
+  AiActionStatus,
+  AutonomyLevel,
+  ActionScope,
+  NudgeTone,
+  PlanChangeKind,
+  PlanStatus,
+  Priority,
+  ProjectStatus,
+  ProtectedTimeKind,
+  RemoteOpKind,
+  RemoteOpStatus,
+  SyncDirection,
+  SyncOutcome,
+  TaskStatus,
+} from '../generated/client/index.js';
+
+export type {
+  User,
+  Session,
+  UserPreferences,
+  CalendarConnection,
+  Calendar,
+  Event,
+  Project,
+  Milestone,
+  Task,
+  TaskDependency,
+  ScheduledBlock,
+  PlanVersion,
+  PlanChange,
+  WorkingHours,
+  EnergyWindow,
+  ProtectedTime,
+  TimeEstimateSample,
+  PendingRemoteOp,
+  SyncLog,
+  SyncConflict,
+  AiSetting,
+  AiAction,
+  AuditLog,
+} from '../generated/client/index.js';

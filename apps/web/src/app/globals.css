@@ -1,0 +1,176 @@
+@import 'tailwindcss';
+@plugin "daisyui";
+
+/*
+ * Two themes rather than a colour-inversion filter.
+ *
+ * "fluid" is a warm, low-glare palette: this is an app someone opens when they
+ * are already overloaded, so the default surface should be quiet. "fluidcontrast"
+ * is a genuine high-contrast theme — near-black on white with hard borders —
+ * rather than the same palette with the saturation pushed up.
+ */
+@plugin "daisyui/theme" {
+  name: 'fluid';
+  default: true;
+  color-scheme: light;
+
+  --color-base-100: oklch(99% 0.004 85);
+  --color-base-200: oklch(96.5% 0.006 85);
+  --color-base-300: oklch(92.5% 0.008 85);
+  --color-base-content: oklch(24% 0.012 60);
+
+  --color-primary: oklch(55% 0.16 38);
+  --color-primary-content: oklch(99% 0.004 85);
+  --color-secondary: oklch(52% 0.09 240);
+  --color-secondary-content: oklch(99% 0.004 85);
+  --color-accent: oklch(52% 0.1 160);
+  --color-accent-content: oklch(99% 0.004 85);
+  --color-neutral: oklch(34% 0.012 60);
+  --color-neutral-content: oklch(97% 0.004 85);
+
+  --color-info: oklch(54% 0.09 240);
+  --color-info-content: oklch(99% 0.004 85);
+  --color-success: oklch(52% 0.09 155);
+  --color-success-content: oklch(99% 0.004 85);
+  --color-warning: oklch(62% 0.11 75);
+  --color-warning-content: oklch(21% 0.02 75);
+  --color-error: oklch(52% 0.16 26);
+  --color-error-content: oklch(99% 0.004 85);
+
+  --radius-selector: 0.75rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.9rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: 'fluidcontrast';
+  color-scheme: light;
+
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(96% 0 0);
+  --color-base-300: oklch(88% 0 0);
+  --color-base-content: oklch(0% 0 0);
+
+  --color-primary: oklch(38% 0.16 34);
+  --color-primary-content: oklch(100% 0 0);
+  --color-secondary: oklch(32% 0.11 250);
+  --color-secondary-content: oklch(100% 0 0);
+  --color-accent: oklch(32% 0.1 160);
+  --color-accent-content: oklch(100% 0 0);
+  --color-neutral: oklch(15% 0 0);
+  --color-neutral-content: oklch(100% 0 0);
+
+  --color-info: oklch(34% 0.11 250);
+  --color-info-content: oklch(100% 0 0);
+  --color-success: oklch(33% 0.1 155);
+  --color-success-content: oklch(100% 0 0);
+  --color-warning: oklch(40% 0.11 70);
+  --color-warning-content: oklch(100% 0 0);
+  --color-error: oklch(38% 0.17 26);
+  --color-error-content: oklch(100% 0 0);
+
+  --radius-selector: 0.4rem;
+  --radius-field: 0.3rem;
+  --radius-box: 0.4rem;
+  --border: 2px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Accessibility modes.
+ *
+ * Driven by data attributes stamped on <html> server-side, so they apply before
+ * first paint. Doing this in an effect would flash the default theme first —
+ * which, for someone who has asked for reduced motion or high contrast, is
+ * exactly the thing they asked not to happen.
+ * ------------------------------------------------------------------------- */
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/*
+ * No web font is loaded: the CSP forbids external origins, and that is worth
+ * more than a bundled typeface. The spacing changes carry most of the
+ * readability benefit anyway.
+ */
+:root[data-dyslexia='on'] body {
+  font-family: 'Comic Sans MS', 'Trebuchet MS', Verdana, sans-serif;
+  letter-spacing: 0.02em;
+  word-spacing: 0.12em;
+  line-height: 1.85;
+}
+
+:root[data-text='large'] {
+  font-size: 118%;
+}
+
+/* Keyboard focus must be obvious, not merely present. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Calendar grid.
+ *
+ * The one place raw CSS beats utility classes: blocks are absolutely positioned
+ * from computed percentages, so the values come from the data, not the markup.
+ * ------------------------------------------------------------------------- */
+
+.cal-col {
+  position: relative;
+  min-height: 44rem;
+}
+
+.cal-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--color-base-300);
+  pointer-events: none;
+}
+
+.cal-evt {
+  position: absolute;
+  left: 0.15rem;
+  right: 0.15rem;
+  overflow: hidden;
+  border-radius: var(--radius-field);
+  border-width: 1px;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.cal-evt-proposed {
+  border-style: dashed;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    color-mix(in oklab, var(--color-primary) 12%, transparent) 4px,
+    color-mix(in oklab, var(--color-primary) 12%, transparent) 8px
+  );
+}

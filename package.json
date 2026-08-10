@@ -1,0 +1,40 @@
+{
+  "name": "fluid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ADHD-focused AI calendar and project planner",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @fluid/web",
+    "dev:worker": "npm run dev --workspace @fluid/worker",
+    "build": "npm run build --workspace @fluid/web",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d",
+    "db:generate": "npm run generate --workspace @fluid/db",
+    "db:migrate": "npm run migrate --workspace @fluid/db",
+    "db:seed": "npm run seed --workspace @fluid/db",
+    "db:studio": "npm run studio --workspace @fluid/db",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
+    "lint": "eslint .",
+    "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs",
+    "verify": "npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.18.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^3.0.0"
+  }
+}

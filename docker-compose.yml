@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fluid-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fluid
+      POSTGRES_PASSWORD: fluid_dev_password
+      POSTGRES_DB: fluid
+    ports:
+      - "5433:5432"
+    volumes:
+      - fluid-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fluid -d fluid"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: fluid-redis
+    restart: unless-stopped
+    # Queue jobs are durable work (sync ops, nudges) — persist them.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - fluid-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  fluid-pgdata:
+  fluid-redisdata:

@@ -1,0 +1,33 @@
+{
+  "name": "@fluid/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./repositories": "./src/repositories/index.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate": "dotenv -e ../../.env -- prisma migrate dev",
+    "migrate:create": "dotenv -e ../../.env -- prisma migrate dev --create-only",
+    "migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
+    "studio": "dotenv -e ../../.env -- prisma studio",
+    "seed": "dotenv -e ../../.env -- tsx src/seed.ts",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@fluid/crypto": "*",
+    "@fluid/env": "*",
+    "@prisma/client": "^6.3.0",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0",
+    "prisma": "^6.3.0",
+    "tsx": "^4.19.0"
+  },
+  "prisma": {
+    "seed": "tsx src/seed.ts"
+  }
+}
