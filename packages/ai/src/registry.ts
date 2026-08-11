@@ -190,7 +190,7 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
   },
   {
     id: 'claude-code',
-    label: 'Claude Code (local CLI)',
+    label: 'Claude (browser sign-in)',
     protocol: 'cli',
     baseUrl: '',
     // The CLI is already signed in; there is no key for this app to hold.
@@ -207,11 +207,11 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     // currently considers current.
     defaultModel: 'sonnet',
     blurb:
-      'Uses the Claude Code CLI already installed and signed in on this machine — no API key, no second bill. Tools are disabled for these calls.',
+      'Sign in with your Claude account. Runs through the Claude Code CLI on this machine — no API key, no second bill.',
   },
   {
     id: 'codex',
-    label: 'Codex (local CLI)',
+    label: 'ChatGPT (browser sign-in)',
     protocol: 'cli',
     baseUrl: '',
     requiresKey: false,
@@ -219,13 +219,13 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     cli: { command: 'codex', variant: 'codex' },
     signIn: {
       command: 'codex',
-      install: 'https://developers.openai.com/codex/cli',
+      install: 'https://learn.chatgpt.com/docs/codex/cli',
       detail:
-        'Run it once in a terminal and sign in with your ChatGPT account. This app then reuses that session — the official way to use a ChatGPT subscription here.',
+        'Run it once and choose “Sign in with ChatGPT”. This app then reuses that session — the only sanctioned way to spend a ChatGPT subscription here, since OpenAI publishes no equivalent of Anthropic’s SDK-readable login profile.',
     },
     unverified: true,
     blurb:
-      'Uses the Codex CLI already installed and signed in on this machine. Not yet verified against a live install — use Test connection first.',
+      'Sign in with your ChatGPT account. Runs through the Codex CLI on this machine — no API key, no second bill.',
   },
   {
     id: 'custom',

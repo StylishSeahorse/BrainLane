@@ -113,11 +113,29 @@ export function AiProviderForm({
               setTestResult(null);
             }}
           >
-            {providers.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.label}
-              </option>
-            ))}
+            {/*
+              Grouped so the keyless options read as a set. Scattered among a
+              dozen key-based entries, "sign in with your ChatGPT account" is
+              easy to miss entirely — which is exactly what happened before.
+            */}
+            <optgroup label="Sign in with an account">
+              {providers
+                .filter((entry) => entry.signIn)
+                .map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </option>
+                ))}
+            </optgroup>
+            <optgroup label="Use an API key">
+              {providers
+                .filter((entry) => !entry.signIn)
+                .map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </option>
+                ))}
+            </optgroup>
           </select>
           <p className="label text-xs">{provider.blurb}</p>
         </fieldset>
