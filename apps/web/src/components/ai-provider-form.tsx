@@ -18,6 +18,8 @@ export interface ProviderOption {
   defaultModel: string;
   baseUrl: string;
   keyUrl: string | null;
+  isCli: boolean;
+  unverified: boolean;
 }
 
 export interface CurrentAiSettings {
@@ -119,7 +121,7 @@ export function AiProviderForm({
           <p className="label text-xs">{provider.blurb}</p>
         </fieldset>
 
-        {provider.editableBaseUrl ? (
+        {provider.editableBaseUrl && !provider.isCli ? (
           <fieldset className="fieldset">
             <legend className="fieldset-legend">Endpoint URL</legend>
             <input
@@ -133,13 +135,30 @@ export function AiProviderForm({
               Must be https, unless it is on localhost. Private and internal addresses are refused.
             </p>
           </fieldset>
+        ) : provider.isCli ? (
+          <div className="bg-base-200 rounded-box space-y-1 p-3 text-xs">
+            <p>
+              Runs <code className="font-mono">{provider.id === 'codex' ? 'codex' : 'claude'}</code>{' '}
+              on this machine, using the login it already has. Only works where the app and the CLI
+              run on the same computer.
+            </p>
+            <p className="text-base-content/50">
+              Tool access is switched off for these calls, so nothing in a calendar invite can reach
+              your files or shell.
+            </p>
+            {provider.unverified ? (
+              <p className="text-warning">
+                Not yet verified against a live install — run Test connection before relying on it.
+              </p>
+            ) : null}
+          </div>
         ) : (
           <p className="text-base-content/45 text-xs">
             Endpoint: <code className="font-mono">{provider.baseUrl}</code>
           </p>
         )}
 
-        {provider.requiresKey || provider.editableBaseUrl ? (
+        {!provider.isCli && (provider.requiresKey || provider.editableBaseUrl) ? (
           <fieldset className="fieldset">
             <legend className="fieldset-legend">
               API key {provider.requiresKey ? '' : '(optional)'}

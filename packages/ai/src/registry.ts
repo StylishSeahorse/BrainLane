@@ -17,7 +17,7 @@
  * ships.
  */
 
-export type ProviderProtocol = 'anthropic' | 'openai-compatible';
+export type ProviderProtocol = 'anthropic' | 'openai-compatible' | 'cli';
 
 export interface ProviderDefinition {
   /** Stable catalog key. Persisted on the user's settings row. */
@@ -40,6 +40,15 @@ export interface ProviderDefinition {
   /** Where to get a key. Shown next to the key field. */
   keyUrl?: string;
   blurb: string;
+  /**
+   * For `protocol: 'cli'` — which local binary to launch.
+   *
+   * Fixed here and never user-editable. A user-supplied command would be a
+   * remote-code-execution feature with a settings page.
+   */
+  cli?: { command: string; variant: 'claude-code' | 'codex' };
+  /** Shown as a caveat in the UI when we have not verified the integration. */
+  unverified?: boolean;
 }
 
 export const PROVIDERS: readonly ProviderDefinition[] = [
@@ -146,6 +155,33 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     allowLocalhost: true,
     supportsModelListing: true,
     blurb: 'Runs on your own machine. Nothing leaves it.',
+  },
+  {
+    id: 'claude-code',
+    label: 'Claude Code (local CLI)',
+    protocol: 'cli',
+    baseUrl: '',
+    // The CLI is already signed in; there is no key for this app to hold.
+    requiresKey: false,
+    allowLocalhost: true,
+    cli: { command: 'claude', variant: 'claude-code' },
+    // An alias rather than a pinned version, so it follows whatever the CLI
+    // currently considers current.
+    defaultModel: 'sonnet',
+    blurb:
+      'Uses the Claude Code CLI already installed and signed in on this machine — no API key, no second bill. Tools are disabled for these calls.',
+  },
+  {
+    id: 'codex',
+    label: 'Codex (local CLI)',
+    protocol: 'cli',
+    baseUrl: '',
+    requiresKey: false,
+    allowLocalhost: true,
+    cli: { command: 'codex', variant: 'codex' },
+    unverified: true,
+    blurb:
+      'Uses the Codex CLI already installed and signed in on this machine. Not yet verified against a live install — use Test connection first.',
   },
   {
     id: 'custom',

@@ -8,12 +8,14 @@
  * anywhere upstream.
  */
 import 'server-only';
+import { tmpdir } from 'node:os';
 import { env, features } from '@fluid/env';
 import { prisma } from '@fluid/db';
 import { openSecret, sealSecret } from '@fluid/crypto';
 import { getProvider, resolveBaseUrl, type AIProvider, type ProviderDefinition } from '@fluid/ai';
 import { AnthropicAdapter } from '@fluid/ai/adapters/anthropic';
 import { OpenAICompatibleAdapter } from '@fluid/ai/adapters/openai-compatible';
+import { CliAdapter } from '@fluid/ai/adapters/cli';
 
 const KEY_PURPOSE = 'ai-api-key';
 
@@ -61,10 +63,18 @@ export async function resolveConfig(userId: string): Promise<ResolvedProviderCon
 
   if (definition.requiresKey && !apiKey) return null;
 
+  const model = setting?.model?.trim() || definition.defaultModel;
+
+  // A local CLI authenticates itself and carries its own default model, so it
+  // needs neither a key nor an endpoint — and an empty model just means "use
+  // whatever the CLI is configured for".
+  if (definition.protocol === 'cli') {
+    return { definition, baseUrl: '', model: model ?? '', apiKey: undefined };
+  }
+
   const baseUrl = resolveBaseUrl(definition, setting?.baseUrl);
   if (!baseUrl) return null;
 
-  const model = setting?.model?.trim() || definition.defaultModel;
   if (!model) return null;
 
   return { definition, baseUrl, model, apiKey };
@@ -76,6 +86,20 @@ export function buildProvider(config: ResolvedProviderConfig): AIProvider {
 
   if (definition.protocol === 'anthropic') {
     return new AnthropicAdapter({ apiKey: apiKey!, model });
+  }
+
+  if (definition.protocol === 'cli') {
+    if (!definition.cli) throw new Error(`Provider ${definition.id} is missing its CLI config`);
+
+    return new CliAdapter({
+      // Straight from the registry — never from stored settings or user input.
+      command: definition.cli.command,
+      variant: definition.cli.variant,
+      model: model || undefined,
+      // Run somewhere inert. The CLI has no tools enabled, but there is no
+      // reason for its working directory to be a real project either.
+      cwd: tmpdir(),
+    });
   }
 
   return new OpenAICompatibleAdapter({

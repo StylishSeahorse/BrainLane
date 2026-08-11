@@ -30,6 +30,8 @@ export const aiRouter = router({
         defaultModel: provider.defaultModel ?? '',
         baseUrl: provider.baseUrl,
         keyUrl: provider.keyUrl ?? null,
+        isCli: provider.protocol === 'cli',
+        unverified: provider.unverified ?? false,
       })),
       current: {
         providerId: definition.id,
