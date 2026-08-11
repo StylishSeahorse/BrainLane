@@ -20,6 +20,7 @@ export interface ProviderOption {
   keyUrl: string | null;
   isCli: boolean;
   unverified: boolean;
+  signIn: { command: string; install?: string; detail: string } | null;
 }
 
 export interface CurrentAiSettings {
@@ -121,6 +122,40 @@ export function AiProviderForm({
           <p className="label text-xs">{provider.blurb}</p>
         </fieldset>
 
+        {/*
+          Sign-in providers get the command, not a button.
+
+          Neither Anthropic nor OpenAI publishes an OAuth client that lets a
+          third-party app spend a consumer subscription, so this app runs no
+          OAuth flow of its own — it points at the official one and then uses
+          the credentials that leaves behind. Showing the exact command is more
+          honest, and more useful, than a button that could not work.
+        */}
+        {provider.signIn ? (
+          <div className="border-primary/25 bg-primary/5 rounded-box space-y-2 border p-3">
+            <p className="text-sm font-medium">Sign in once, in a terminal</p>
+            <p className="text-base-content/60 text-xs">{provider.signIn.detail}</p>
+
+            <pre className="bg-base-300/60 overflow-x-auto rounded-lg px-3 py-2 font-mono text-xs">
+              <code>{provider.signIn.command}</code>
+            </pre>
+
+            {provider.signIn.install ? (
+              <p className="text-base-content/50 text-xs">
+                Not installed?{' '}
+                <a
+                  href={provider.signIn.install}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="link"
+                >
+                  Install instructions
+                </a>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {provider.editableBaseUrl && !provider.isCli ? (
           <fieldset className="fieldset">
             <legend className="fieldset-legend">Endpoint URL</legend>
@@ -152,7 +187,7 @@ export function AiProviderForm({
               </p>
             ) : null}
           </div>
-        ) : (
+        ) : provider.signIn ? null : (
           <p className="text-base-content/45 text-xs">
             Endpoint: <code className="font-mono">{provider.baseUrl}</code>
           </p>

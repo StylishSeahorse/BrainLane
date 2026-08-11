@@ -12,6 +12,7 @@ import {
 import { OpenAICompatibleAdapter } from '@fluid/ai/adapters/openai-compatible';
 import { protectedProcedure, router } from '../trpc';
 import { buildProvider, encryptApiKey, resolveConfig } from '../services/ai-provider';
+import { checkReadiness } from '../services/ai-diagnostics';
 
 export const aiRouter = router({
   /** The catalog, plus the user's current selection. */
@@ -32,6 +33,7 @@ export const aiRouter = router({
         keyUrl: provider.keyUrl ?? null,
         isCli: provider.protocol === 'cli',
         unverified: provider.unverified ?? false,
+        signIn: provider.signIn ?? null,
       })),
       current: {
         providerId: definition.id,
@@ -148,6 +150,9 @@ export const aiRouter = router({
     }
     return { models: [] as string[] };
   }),
+
+  /** Cheap pre-flight: is this provider set up, and if not, what fixes it? */
+  readiness: protectedProcedure.query(async ({ ctx }) => checkReadiness(ctx.user.id)),
 
   /** Exercise the exact configuration the scheduler would use. */
   test: protectedProcedure.mutation(async ({ ctx }) => {

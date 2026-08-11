@@ -61,7 +61,15 @@ const EFFORT_BY_REASONING = {
 } as const;
 
 export interface AnthropicAdapterOptions {
-  apiKey: string;
+  /**
+   * Omit to use ambient credentials.
+   *
+   * With no key, the SDK resolves in its documented order: `ANTHROPIC_API_KEY`,
+   * then `ANTHROPIC_AUTH_TOKEN`, then the OAuth profile written by
+   * `ant auth login`. That last one is how someone signs in through a browser
+   * instead of pasting a key.
+   */
+  apiKey?: string | undefined;
   model?: string;
   timeoutMs?: number;
   /** Injectable for tests; defaults to a real client. */
@@ -79,7 +87,10 @@ export class AnthropicAdapter implements AIProvider {
     this.client =
       options.client ??
       new Anthropic({
-        apiKey: options.apiKey,
+        // Spread rather than pass `undefined`: omitting the property entirely
+        // is what lets the SDK fall through to `ANTHROPIC_AUTH_TOKEN` and the
+        // `ant auth login` OAuth profile.
+        ...(options.apiKey ? { apiKey: options.apiKey } : {}),
         timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         // The caller already wraps every call in `withFallback`, which has its
         // own deadline. Two retries inside that budget is the useful maximum —

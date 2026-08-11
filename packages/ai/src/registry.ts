@@ -49,6 +49,21 @@ export interface ProviderDefinition {
   cli?: { command: string; variant: 'claude-code' | 'codex' };
   /** Shown as a caveat in the UI when we have not verified the integration. */
   unverified?: boolean;
+  /**
+   * Providers authenticated by an external sign-in rather than a key.
+   *
+   * Neither Anthropic nor OpenAI offers a public OAuth client that lets a
+   * third-party app spend a consumer subscription, so the app never runs an
+   * OAuth flow itself — it tells you which official command to run, and then
+   * uses the credentials that command leaves behind.
+   */
+  signIn?: {
+    /** The command that performs the sign-in. */
+    command: string;
+    /** Where to get the tool, when it may not be installed. */
+    install?: string;
+    detail: string;
+  };
 }
 
 export const PROVIDERS: readonly ProviderDefinition[] = [
@@ -61,6 +76,23 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     defaultModel: 'claude-opus-5',
     keyUrl: 'https://console.anthropic.com/settings/keys',
     blurb: 'Claude models, called natively.',
+  },
+  {
+    id: 'anthropic-oauth',
+    label: 'Anthropic (browser sign-in)',
+    protocol: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    // Credentials come from the OAuth profile `ant auth login` writes, which
+    // the SDK resolves on its own. Nothing for this app to hold.
+    requiresKey: false,
+    signIn: {
+      command: 'ant auth login',
+      install: 'https://platform.claude.com/docs/en/api/sdks/cli',
+      detail:
+        'Signs in through your browser and stores a profile this app picks up automatically. No API key to paste or store.',
+    },
+    defaultModel: 'claude-opus-5',
+    blurb: 'Sign in with your Anthropic account instead of managing an API key.',
   },
   {
     id: 'openai',
@@ -165,6 +197,12 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     requiresKey: false,
     allowLocalhost: true,
     cli: { command: 'claude', variant: 'claude-code' },
+    signIn: {
+      command: 'claude',
+      install: 'https://claude.com/product/claude-code',
+      detail:
+        'Run it once in a terminal and sign in with your Claude account. This app then reuses that session — the official way to use a Claude subscription here.',
+    },
     // An alias rather than a pinned version, so it follows whatever the CLI
     // currently considers current.
     defaultModel: 'sonnet',
@@ -179,6 +217,12 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     requiresKey: false,
     allowLocalhost: true,
     cli: { command: 'codex', variant: 'codex' },
+    signIn: {
+      command: 'codex',
+      install: 'https://developers.openai.com/codex/cli',
+      detail:
+        'Run it once in a terminal and sign in with your ChatGPT account. This app then reuses that session — the official way to use a ChatGPT subscription here.',
+    },
     unverified: true,
     blurb:
       'Uses the Codex CLI already installed and signed in on this machine. Not yet verified against a live install — use Test connection first.',

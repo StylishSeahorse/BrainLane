@@ -114,8 +114,10 @@ describe('argument construction', () => {
 
 describe('model name validation', () => {
   it('refuses shell metacharacters in the model name', () => {
-    // Windows needs `shell: true` to launch a .cmd shim, so an argv value that
-    // survives a shell is the whole attack. These must never be constructible.
+    // Two separate hazards. Shell metacharacters are defence in depth (the
+    // process is spawned without a shell), but a leading `-` is live: the CLI
+    // would read it as a flag, and `--dangerously-skip-permissions` would undo
+    // the tools restriction. Neither must be constructible.
     for (const model of [
       'sonnet; rm -rf /',
       'sonnet && curl evil.test',
@@ -153,5 +155,38 @@ describe('missing binary', () => {
     // healthCheck swallows the error and reports false, so a provider that is
     // not installed degrades to the deterministic scheduler.
     await expect(adapter.healthCheck()).resolves.toBe(false);
+  });
+});
+
+describe('subscription sign-in metadata', () => {
+  it('tells the user which official command signs them in', () => {
+    // The app deliberately runs no OAuth flow of its own — neither vendor
+    // publishes a client that lets a third party spend a consumer
+    // subscription. Naming the official command is the honest substitute.
+    const expected: Record<string, string> = {
+      'claude-code': 'claude',
+      codex: 'codex',
+      'anthropic-oauth': 'ant auth login',
+    };
+
+    for (const [id, command] of Object.entries(expected)) {
+      const provider = getProvider(id);
+      expect(provider.signIn?.command, id).toBe(command);
+      expect(provider.signIn?.detail.length, id).toBeGreaterThan(20);
+    }
+  });
+
+  it('never asks a sign-in provider for an API key', () => {
+    for (const id of ['claude-code', 'codex', 'anthropic-oauth']) {
+      expect(getProvider(id).requiresKey, id).toBe(false);
+    }
+  });
+
+  it('keeps the key-based Anthropic entry distinct from the sign-in one', () => {
+    // Both talk to Anthropic, but only one wants a key — collapsing them would
+    // force a key on someone who signed in through a browser.
+    expect(getProvider('anthropic').requiresKey).toBe(true);
+    expect(getProvider('anthropic').signIn).toBeUndefined();
+    expect(getProvider('anthropic-oauth').protocol).toBe('anthropic');
   });
 });
