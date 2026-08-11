@@ -213,7 +213,12 @@ export async function pinnedFetch(
   try {
     return await fetch(url, {
       ...rest,
-      redirect: 'error',
+      // Never `follow`. A 302 to the metadata service would undo every check
+      // above, because the redirect target is fetched by the runtime without
+      // passing through any of this. `manual` is offered for callers that must
+      // handle real redirects — CalDAV's `/.well-known/caldav` is always one —
+      // on the condition that they re-validate each hop themselves.
+      redirect: rest.redirect === 'manual' ? 'manual' : 'error',
       signal: controller.signal,
     });
   } finally {

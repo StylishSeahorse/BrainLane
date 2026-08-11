@@ -3,6 +3,7 @@ import { prisma } from '@fluid/db';
 import { setAutonomy, updateAccessibility } from '@/app/actions';
 import { PageHeader, SectionTitle } from '@/components/page-header';
 import { AiProviderForm } from '@/components/ai-provider-form';
+import { CalendarConnections } from '@/components/calendar-connections';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
@@ -31,9 +32,9 @@ export default async function SettingsPage() {
   const user = await requireUser();
   const caller = await getCaller();
 
-  const [preferences, connections, autonomy, aiSettings] = await Promise.all([
+  const [preferences, calendars, autonomy, aiSettings] = await Promise.all([
     prisma.userPreferences.findUnique({ where: { userId: user.id } }),
-    prisma.calendarConnection.findMany({ where: { userId: user.id } }),
+    caller.calendar.connections(),
     caller.agent.autonomy(),
     caller.ai.settings(),
   ]);
@@ -159,37 +160,11 @@ export default async function SettingsPage() {
       )}
 
       <SectionTitle>Calendars</SectionTitle>
-      <div className="card bg-base-100 border-base-200 border shadow-sm">
-        <div className="card-body">
-          {connections.length === 0 ? (
-            <p className="text-base-content/70 text-sm">
-              No calendars connected. The sync engine, adapter interface and conflict model are
-              built; the Google OAuth flow is not wired up yet, so scheduled blocks currently live
-              only in Fluid.
-            </p>
-          ) : (
-            <ul className="divide-base-200 divide-y">
-              {connections.map((connection) => (
-                <li key={connection.id} className="flex items-center justify-between gap-3 py-2.5">
-                  <div className="min-w-0">
-                    <div className="font-medium">{connection.provider}</div>
-                    <p className="text-base-content/50 truncate text-xs">
-                      {connection.accountIdentifier}
-                    </p>
-                  </div>
-                  <span
-                    className={`badge badge-sm badge-soft shrink-0 ${
-                      connection.status === 'ACTIVE' ? 'badge-success' : 'badge-error'
-                    }`}
-                  >
-                    {connection.status.toLowerCase().replace('_', ' ')}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+      <CalendarConnections
+        connections={calendars.connections}
+        undeliveredWrites={calendars.undeliveredWrites}
+        timeZone={user.timeZone}
+      />
     </>
   );
 }

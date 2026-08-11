@@ -31,7 +31,14 @@ export interface ContractHarness {
   adapter: CalendarAdapter;
   connection: ConnectionRef;
   calendar: CalendarRef;
-  /** Create an event as though it were made in the provider's own UI. */
+  /**
+   * Create an event as though it were made in the provider's own UI.
+   *
+   * The `externalId` passed in is a hint, not a demand — a provider that mints
+   * its own ids (CalDAV derives one from the resource path) is free to ignore
+   * it. Assertions below use the id on the *returned* event, so the suite works
+   * for both kinds.
+   */
   seedRemote(event: Partial<RemoteEvent> & { externalId: string }): Promise<RemoteEvent> | RemoteEvent;
   /** Delete at the provider, producing a genuine tombstone. */
   deleteRemote(externalId: string): Promise<void> | void;
@@ -167,26 +174,26 @@ export function runAdapterContract(name: string, setup: () => ContractHarness): 
     describe('pull', () => {
       it('returns a full snapshot when given no cursor, and labels it as one', async () => {
         const { adapter, connection, calendar, seedRemote } = setup();
-        await seedRemote({ externalId: 'remote-1', title: 'Standup' });
+        const seeded = await seedRemote({ externalId: 'remote-1', title: 'Standup' });
 
         const result = await adapter.pull(connection, calendar, undefined);
 
         expect(result.isFullSnapshot).toBe(true);
-        expect(result.changes.some((event) => event.externalId === 'remote-1')).toBe(true);
+        expect(result.changes.some((event) => event.externalId === seeded.externalId)).toBe(true);
       });
 
       it('returns only changes after a cursor', async () => {
         const { adapter, connection, calendar, seedRemote } = setup();
         if (!adapter.capabilities.incrementalSync) return;
 
-        await seedRemote({ externalId: 'before', title: 'Before' });
+        const before = await seedRemote({ externalId: 'before', title: 'Before' });
         const first = await adapter.pull(connection, calendar, undefined);
 
-        await seedRemote({ externalId: 'after', title: 'After' });
+        const after = await seedRemote({ externalId: 'after', title: 'After' });
         const second = await adapter.pull(connection, calendar, first.nextCursor);
 
-        expect(second.changes.some((event) => event.externalId === 'after')).toBe(true);
-        expect(second.changes.some((event) => event.externalId === 'before')).toBe(false);
+        expect(second.changes.some((event) => event.externalId === after.externalId)).toBe(true);
+        expect(second.changes.some((event) => event.externalId === before.externalId)).toBe(false);
         expect(second.isFullSnapshot).toBe(false);
       });
 
@@ -209,13 +216,13 @@ export function runAdapterContract(name: string, setup: () => ContractHarness): 
         const { adapter, connection, calendar, seedRemote, deleteRemote } = setup();
         if (!adapter.capabilities.deletionTombstones || !adapter.capabilities.incrementalSync) return;
 
-        await seedRemote({ externalId: 'doomed', title: 'Will be deleted' });
+        const doomed = await seedRemote({ externalId: 'doomed', title: 'Will be deleted' });
         const first = await adapter.pull(connection, calendar, undefined);
 
-        await deleteRemote('doomed');
+        await deleteRemote(doomed.externalId);
         const second = await adapter.pull(connection, calendar, first.nextCursor);
 
-        const tombstone = second.changes.find((event) => event.externalId === 'doomed');
+        const tombstone = second.changes.find((event) => event.externalId === doomed.externalId);
         expect(tombstone).toBeDefined();
         expect(tombstone!.isDeleted).toBe(true);
       });
@@ -239,10 +246,10 @@ export function runAdapterContract(name: string, setup: () => ContractHarness): 
       it('preserves recurrence rules verbatim', async () => {
         const { adapter, connection, calendar, seedRemote } = setup();
         const rrule = 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20261231T235959Z';
-        await seedRemote({ externalId: 'recurring', title: 'Weekly sync', rrule });
+        const seeded = await seedRemote({ externalId: 'recurring', title: 'Weekly sync', rrule });
 
         const result = await adapter.pull(connection, calendar, undefined);
-        const event = result.changes.find((candidate) => candidate.externalId === 'recurring');
+        const event = result.changes.find((candidate) => candidate.externalId === seeded.externalId);
 
         // Byte-for-byte. Re-emitting a parsed rule is how a weekly meeting
         // quietly becomes a daily one.

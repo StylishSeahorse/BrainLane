@@ -9,6 +9,7 @@ const config: NextConfig = {
     '@fluid/crypto',
     '@fluid/db',
     '@fluid/env',
+    '@fluid/net',
   ],
   // Native/binary deps must not be bundled — they're required at runtime.
   serverExternalPackages: ['@prisma/client', '@node-rs/argon2'],

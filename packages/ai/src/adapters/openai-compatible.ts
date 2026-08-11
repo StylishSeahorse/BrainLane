@@ -33,7 +33,7 @@ import {
   chatPrompt,
   schedulingPrompt,
 } from '../prompts/index';
-import { assertSafeEndpoint, pinnedFetch, UnsafeEndpointError } from '../net/safe-url';
+import { assertSafeEndpoint, pinnedFetch, UnsafeEndpointError } from '@fluid/net';
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 

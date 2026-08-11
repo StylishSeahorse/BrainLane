@@ -62,6 +62,16 @@ const schema = z.object({
 
   ANTHROPIC_API_KEY: optionalString,
   AI_DISABLED: booleanFlag,
+
+  /**
+   * Permit a CalDAV server on localhost.
+   *
+   * Off by default, and it must stay off in production: the SSRF guard's whole
+   * job is to stop a URL someone typed from reaching the machine the server
+   * runs on. It exists for the person testing against a Radicale container on
+   * their own laptop, where "the server" and "their machine" are the same thing.
+   */
+  CALDAV_ALLOW_LOCALHOST: booleanFlag,
 });
 
 export type Env = z.infer<typeof schema>;
@@ -99,4 +109,9 @@ export const features = {
   ai: !env.AI_DISABLED,
   /** A server-side default key exists (users may still bring their own). */
   aiDefaultKey: !env.AI_DISABLED && Boolean(env.ANTHROPIC_API_KEY),
+  /**
+   * A locally hosted CalDAV server may be used. Never enable in production —
+   * see the note on the variable.
+   */
+  caldavLocalhost: env.CALDAV_ALLOW_LOCALHOST && env.NODE_ENV !== 'production',
 } as const;

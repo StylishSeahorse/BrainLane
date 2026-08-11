@@ -161,6 +161,18 @@ export interface PullResult {
   isFullSnapshot: boolean;
   /** More pages remain; call again with this cursor. */
   hasMore: boolean;
+  /**
+   * The time range a full snapshot actually covers.
+   *
+   * Load-bearing for CalDAV. A `calendar-query` is always bounded — asking a
+   * shared work calendar for every event since 1970 is a request that times
+   * out — so its result is a complete snapshot *of a window*, not of the
+   * collection. Without this field the sync engine would see every event
+   * outside the window as absent and tombstone the lot.
+   *
+   * Absent means the snapshot really does cover everything.
+   */
+  snapshotWindow?: { from: Date; to: Date };
 }
 
 export interface Subscription {

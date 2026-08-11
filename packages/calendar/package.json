@@ -5,9 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing/index.ts"
+    "./testing": "./src/testing/index.ts",
+    "./adapters/caldav": "./src/adapters/caldav/index.ts"
   },
   "dependencies": {
-    "@fluid/core": "*"
+    "@fluid/core": "*",
+    "@fluid/net": "*",
+    "fast-xml-parser": "^4.5.1"
   }
 }

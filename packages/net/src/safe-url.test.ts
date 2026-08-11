@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertSafeEndpoint, isBlockedAddress, pinnedFetch, UnsafeEndpointError } from './safe-url';
+import { assertSafeEndpoint, isBlockedAddress, pinnedFetch, UnsafeEndpointError } from './index';
 
 describe('isBlockedAddress', () => {
   it('blocks the cloud metadata endpoint', () => {

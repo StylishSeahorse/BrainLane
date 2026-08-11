@@ -356,3 +356,75 @@ export async function listAiModels(): Promise<string[]> {
   const result = await caller.ai.models();
   return result.models;
 }
+
+// ---------------------------------------------------------------------------
+// Calendar connections
+// ---------------------------------------------------------------------------
+
+export async function connectCalendar(
+  _state: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const caller = await getCaller();
+
+  try {
+    await caller.calendar.connect({
+      serverUrl: String(formData.get('serverUrl') ?? '').trim(),
+      username: String(formData.get('username') ?? '').trim(),
+      password: String(formData.get('password') ?? ''),
+    });
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not connect to that calendar server.') };
+  }
+
+  // Pull straight away, so the first thing someone sees after connecting is
+  // their actual calendar rather than an empty week and a question about
+  // whether it worked.
+  try {
+    await caller.calendar.sync();
+  } catch {
+    // A failed first sync is not a failed connection — the connection page
+    // shows what happened, and Sync now retries it.
+  }
+
+  revalidatePath('/settings');
+  revalidatePath('/calendar');
+  return {};
+}
+
+export async function disconnectCalendar(formData: FormData): Promise<void> {
+  const caller = await getCaller();
+  await caller.calendar.disconnect({ connectionId: String(formData.get('connectionId')) });
+  revalidatePath('/settings');
+  revalidatePath('/calendar');
+}
+
+export async function syncCalendars(): Promise<void> {
+  const caller = await getCaller();
+  await caller.calendar.sync();
+  revalidatePath('/settings');
+  revalidatePath('/calendar');
+  revalidatePath('/today');
+}
+
+export async function setCalendarSelected(formData: FormData): Promise<void> {
+  const caller = await getCaller();
+  await caller.calendar.setSelected({
+    calendarId: String(formData.get('calendarId')),
+    isSelected: formData.get('isSelected') === 'on',
+  });
+  revalidatePath('/settings');
+  revalidatePath('/calendar');
+}
+
+export async function setCalendarWriteTarget(formData: FormData): Promise<void> {
+  const caller = await getCaller();
+  await caller.calendar.setWriteTarget({ calendarId: String(formData.get('calendarId')) });
+  revalidatePath('/settings');
+}
+
+export async function resumeCalendarSync(formData: FormData): Promise<void> {
+  const caller = await getCaller();
+  await caller.calendar.resume({ connectionId: String(formData.get('connectionId')) });
+  revalidatePath('/settings');
+}

@@ -69,7 +69,11 @@ export default async function CalendarPage({
   const weekEnd = startOfLocalDay(weekStart, timeZone, 7);
 
   const { blocks, events } = await caller.plan.blocks({ from: weekStart, to: weekEnd });
-  const connections = await caller.agent.autonomy();
+  const autonomy = await caller.agent.autonomy();
+  const { connections } = await caller.calendar.connections();
+
+  const linked = connections.filter((connection) => connection.status !== 'DISCONNECTED');
+  const halted = linked.find((connection) => connection.status === 'NEEDS_ATTENTION');
 
   const allDays = Array.from({ length: 7 }, (_, index) => startOfLocalDay(weekStart, timeZone, index));
 
@@ -124,13 +128,31 @@ export default async function CalendarPage({
         }
       />
 
+      {/*
+        Says what is actually true right now. A permanent "connect a calendar"
+        prompt shown to someone who already connected one is the fastest way to
+        make every other message on the page unreadable.
+      */}
       <Banner
         icon={<RefreshIcon />}
-        lead="Planner calendar ready."
-        action={{ href: '/settings', label: 'Connect Google' }}
+        lead={
+          halted
+            ? 'Syncing is paused.'
+            : linked.length === 0
+              ? 'Planner calendar ready.'
+              : `Synced with ${linked[0]!.account}.`
+        }
+        action={{
+          href: '/settings',
+          label: halted ? 'See why' : linked.length === 0 ? 'Connect a calendar' : 'Manage calendars',
+        }}
       >
-        Connect Google in Settings to merge live commitments and deliver these blocks.
-        {connections.scope === 'TODAY'
+        {halted
+          ? 'Your calendar is not being updated until you have had a look at what happened.'
+          : linked.length === 0
+            ? 'Connect a CalDAV calendar in Settings to schedule around your real commitments, and to have these blocks appear there.'
+            : 'Your events are treated as busy time, and these blocks are written back to your calendar.'}
+        {autonomy.scope === 'TODAY'
           ? ' The AI is currently limited to rearranging today.'
           : ' The AI may rearrange this whole week.'}
       </Banner>
