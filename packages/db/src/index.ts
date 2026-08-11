@@ -13,7 +13,6 @@ export {
   EventOrigin,
   EventStatus,
   EventTransparency,
-  AiProviderKind,
   AiActionKind,
   AiActionStatus,
   AutonomyLevel,

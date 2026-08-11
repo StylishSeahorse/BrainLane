@@ -2,6 +2,7 @@ import { features } from '@fluid/env';
 import { prisma } from '@fluid/db';
 import { setAutonomy, updateAccessibility } from '@/app/actions';
 import { PageHeader, SectionTitle } from '@/components/page-header';
+import { AiProviderForm } from '@/components/ai-provider-form';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
@@ -30,11 +31,11 @@ export default async function SettingsPage() {
   const user = await requireUser();
   const caller = await getCaller();
 
-  const [preferences, aiSetting, connections, autonomy] = await Promise.all([
+  const [preferences, connections, autonomy, aiSettings] = await Promise.all([
     prisma.userPreferences.findUnique({ where: { userId: user.id } }),
-    prisma.aiSetting.findUnique({ where: { userId: user.id } }),
     prisma.calendarConnection.findMany({ where: { userId: user.id } }),
     caller.agent.autonomy(),
+    caller.ai.settings(),
   ]);
 
   return (
@@ -143,57 +144,19 @@ export default async function SettingsPage() {
         </div>
       </form>
 
-      <SectionTitle>AI and your data</SectionTitle>
-      <div className="card bg-base-100 border-base-200 border shadow-sm">
-        <div className="card-body gap-3">
-          <p className="text-base-content/70 text-sm">
-            {features.ai
-              ? features.aiDefaultKey
-                ? 'AI features are available.'
-                : 'AI is enabled but no API key is configured, so the deterministic scheduler is doing all the work.'
-              : 'AI is switched off entirely (AI_DISABLED=1). Everything still works — the deterministic scheduler runs on its own.'}
-          </p>
-
-          <ul className="divide-base-200 divide-y">
-            {[
-              {
-                label: 'Scheduling',
-                on: aiSetting?.allowScheduling ?? true,
-                detail: 'Sends durations, deadlines and categories. Never task titles.',
-              },
-              {
-                label: 'Task breakdown',
-                on: aiSetting?.allowTaskBreakdown ?? true,
-                detail: 'Sends the task you ask it to break down.',
-              },
-              {
-                label: 'Avoidance check-ins',
-                on: aiSetting?.allowAvoidanceCheck ?? false,
-                detail: 'Off by default. The pattern detection itself is arithmetic and always runs.',
-              },
-              {
-                label: 'Share task titles and notes',
-                on: aiSetting?.shareTaskText ?? false,
-                detail: 'Off by default. With this off, the model never sees your own words.',
-              },
-            ].map((row) => (
-              <li key={row.label} className="flex items-start justify-between gap-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="font-medium">{row.label}</div>
-                  <p className="text-base-content/50 text-xs">{row.detail}</p>
-                </div>
-                <span className={`badge badge-sm badge-soft shrink-0 ${row.on ? 'badge-success' : ''}`}>
-                  {row.on ? 'on' : 'off'}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <p className="text-base-content/40 text-xs">
-            These flags are enforced server-side; editing them from here is not wired up yet.
-          </p>
+      <SectionTitle>AI provider</SectionTitle>
+      {features.ai ? (
+        <AiProviderForm providers={aiSettings.providers} current={aiSettings.current} />
+      ) : (
+        <div className="card bg-base-100 border-base-200 border shadow-sm">
+          <div className="card-body">
+            <p className="text-base-content/70 text-sm">
+              AI is switched off entirely (AI_DISABLED=1). Everything still works — the
+              deterministic scheduler runs on its own.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       <SectionTitle>Calendars</SectionTitle>
       <div className="card bg-base-100 border-base-200 border shadow-sm">

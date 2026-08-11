@@ -7,6 +7,7 @@
  */
 import 'server-only';
 import { initTRPC, TRPCError } from '@trpc/server';
+import { env } from '@fluid/env';
 import type { User } from '@fluid/db';
 import { getCurrentUser } from './auth/session';
 
@@ -20,10 +21,16 @@ export async function createContext(): Promise<Context> {
 
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
+    const { stack: _stack, ...data } = shape.data;
+
     return {
       ...shape,
       data: {
-        ...shape.data,
+        ...data,
+        // Stack traces are stripped outside development explicitly, rather than
+        // trusting tRPC's default to keep doing it. They name internal paths and
+        // module structure, which is free reconnaissance for an attacker.
+        ...(env.NODE_ENV === 'development' ? { stack: _stack } : {}),
         // Zod issues are safe to surface — they describe the caller's own
         // input. Everything else keeps tRPC's generic message.
         validation:

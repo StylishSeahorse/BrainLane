@@ -9,6 +9,9 @@ build/
 out/
 *.tsbuildinfo
 
+# Local editor/agent tooling state
+.claude/
+
 # Secrets — never commit
 .env
 .env.local

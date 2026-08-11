@@ -878,27 +878,25 @@ model SyncConflict {
 // AI configuration
 // ---------------------------------------------------------------------------
 
-enum AiProviderKind {
-  ANTHROPIC
-  OPENAI
-  GOOGLE
-  /// Ollama or any OpenAI-compatible endpoint, for users who want nothing
-  /// leaving their machine.
-  LOCAL
-}
-
 model AiSetting {
   id     String @id @default(cuid())
   userId String @unique
 
-  provider AiProviderKind @default(ANTHROPIC)
-  /// Null falls back to the server's default model for that provider.
+  /// Catalog key from `@fluid/ai`'s provider registry — "anthropic",
+  /// "openrouter", "cometapi", "ollama", and so on.
+  ///
+  /// A string rather than an enum on purpose: providers appear constantly, and
+  /// an enum would mean a database migration every time someone wants to use a
+  /// new one. Unknown values fall back to the default provider rather than
+  /// breaking the account.
+  providerId String @default("anthropic")
+  /// Null falls back to the provider's default model.
   model    String?
   /// Envelope-encrypted, purpose `ai-api-key`. Null uses the server key, if one
   /// is configured.
   encryptedApiKey String?
-  /// For LOCAL: the endpoint to talk to. Validated against the SSRF guard
-  /// before any request is made.
+  /// Only honoured for providers the registry marks as self-hosted. Validated
+  /// against the SSRF guard before any request is made.
   baseUrl String?
 
   // --- Per-feature consent. Off by default is the wrong default for a feature

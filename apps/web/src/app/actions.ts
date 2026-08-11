@@ -314,3 +314,45 @@ export async function setAutonomy(formData: FormData): Promise<void> {
   });
   revalidatePath('/settings');
 }
+
+// ---------------------------------------------------------------------------
+// AI provider configuration
+// ---------------------------------------------------------------------------
+
+export async function saveAiSettings(
+  _state: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const caller = await getCaller();
+
+  try {
+    await caller.ai.save({
+      providerId: String(formData.get('providerId') ?? 'anthropic'),
+      model: String(formData.get('model') ?? '').trim() || undefined,
+      baseUrl: String(formData.get('baseUrl') ?? '').trim() || undefined,
+      apiKey: String(formData.get('apiKey') ?? '').trim() || undefined,
+      clearKey: formData.get('clearKey') === 'on',
+      allowScheduling: formData.get('allowScheduling') === 'on',
+      allowTaskBreakdown: formData.get('allowTaskBreakdown') === 'on',
+      allowAvoidanceCheck: formData.get('allowAvoidanceCheck') === 'on',
+      allowChat: formData.get('allowChat') === 'on',
+      shareTaskText: formData.get('shareTaskText') === 'on',
+    });
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not save those AI settings.') };
+  }
+
+  revalidatePath('/settings');
+  return {};
+}
+
+export async function testAiConnection(): Promise<{ ok: boolean; message: string }> {
+  const caller = await getCaller();
+  return caller.ai.test();
+}
+
+export async function listAiModels(): Promise<string[]> {
+  const caller = await getCaller();
+  const result = await caller.ai.models();
+  return result.models;
+}

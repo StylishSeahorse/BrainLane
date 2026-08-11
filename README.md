@@ -39,7 +39,7 @@ npm run verify
 Then `npm run db:seed` and `npm run dev` — the app is on **http://localhost:3030**,
 and the seeded account is `demo@fluid.local` / `demo-password-1234`.
 
-`verify` runs lint, typecheck, and the test suite — currently 157 tests, all passing.
+`verify` runs lint, typecheck, and the test suite — currently 174 tests, all passing.
 Postgres listens on **5433** and Redis on **6380** (non-default, so they don't collide
 with anything already running locally).
 
@@ -53,7 +53,8 @@ packages/crypto    Envelope encryption, Argon2id passwords, opaque tokens
 packages/db        Prisma schema, migrations, repositories
 packages/core      Scheduler, interval algebra, zoned time — pure, no I/O
 packages/calendar  CalendarAdapter interface + fake + shared contract suite
-packages/ai        AIProvider interface, redaction, validation, Anthropic adapter
+packages/ai        AIProvider interface, provider registry, adapters, redaction,
+                   validation, SSRF guard
 ```
 
 `@fluid/core` has no dependencies at all. That is deliberate: the scheduler is the
@@ -62,7 +63,7 @@ exhaustively in milliseconds.
 
 ---
 
-## The six decisions worth knowing
+## The seven decisions worth knowing
 
 ### 1. Ownership decides who may write an event — not timestamps
 
@@ -168,6 +169,33 @@ change from an hour ago must not unwind the four good ones after it. Refusals ar
 shown too — a guardrail that works silently is indistinguishable from one that
 isn't there.
 
+
+### 7. Any model provider, one adapter
+
+OpenAI, OpenRouter, CometAPI, Gemini, Groq, DeepSeek, Together, Mistral, Ollama and any
+self-hosted server all speak the same OpenAI chat-completions format. So this is not nine
+adapters — it is one adapter plus a catalog in `packages/ai/src/registry.ts`. Adding a
+provider is a registry entry: no migration, no new adapter, no branch in calling code.
+Anthropic keeps its own adapter because its wire format genuinely differs.
+
+`AiSetting.providerId` is a string keyed to that catalog rather than an enum, precisely so
+a new provider never needs a schema change.
+
+**No model IDs are hardcoded anywhere.** Vendors add and retire models weekly, and a stale
+baked-in list is worse than none — it sends people to a model that 404s. Providers exposing
+`GET /models` are queried live, and the field stays free text so a model works the day it
+ships.
+
+Letting someone type an endpoint URL is also the most dangerous input in the product: on a
+cloud host it is a direct line to the instance metadata service.
+`packages/ai/src/net/safe-url.ts` is the guard — https-only outside localhost,
+private/link-local/metadata ranges refused, DNS resolved and pinned to defeat rebinding,
+redirects never followed. 17 tests, including the IPv4-mapped-IPv6 bypass
+(`::ffff:169.254.169.254`).
+
+Keys are envelope-encrypted per user and **write-only**: there is no read path back to the
+browser, and the settings screen only ever reports whether a key is stored.
+
 ---
 
 ## Security controls in place
@@ -222,7 +250,7 @@ provider signal"*, the property that stops a full resync becoming mass data loss
 
 ## What exists / what doesn't
 
-**Working end to end** (157 tests):
+**Working end to end** (174 tests):
 
 - Signup / login / logout, DB-backed sessions, per-page auth guard
 - Task and project CRUD; progressive-disclosure capture form
@@ -232,7 +260,9 @@ provider signal"*, the property that stops a full resync becoming mass data loss
 - ADHD surfaces: runway, "Just start", breakdown, avoidance check-ins, estimation coach
 - Accessibility modes applied server-side before first paint
 - CalendarAdapter + AIProvider interfaces, fakes, shared contract suite
-- Anthropic adapter and provider-neutral prompt templates
+- Provider-neutral prompt templates, plus adapters for Anthropic and every
+  OpenAI-compatible provider (OpenAI, OpenRouter, CometAPI, Gemini, Groq, DeepSeek,
+  Together, Mistral, Ollama, custom), configurable per user with their own key
 
 **Not built**
 
