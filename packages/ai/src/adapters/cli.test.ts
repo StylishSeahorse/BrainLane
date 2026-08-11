@@ -26,9 +26,10 @@ describe('CLI provider registry entries', () => {
     }
   });
 
-  it('marks the unverified integration as unverified', () => {
-    expect(getProvider('codex').unverified).toBe(true);
-    expect(getProvider('claude-code').unverified ?? false).toBe(false);
+  it('carries no unverified caveat now that both are exercised end to end', () => {
+    for (const id of ['claude-code', 'codex']) {
+      expect(getProvider(id).unverified ?? false, id).toBe(false);
+    }
   });
 
   it('gives every CLI provider a command', () => {
@@ -106,9 +107,26 @@ describe('argument construction', () => {
     }
   });
 
-  it('uses codex exec for the Codex variant', () => {
+  it('sandboxes the Codex variant read-only', () => {
     const args = argsFor(new CliAdapter({ command: 'codex', variant: 'codex' }));
+
     expect(args[0]).toBe('exec');
+    // Codex offers no way to disable tools outright, so read-only is the
+    // strongest available restriction. Losing it would let an injected
+    // calendar invite write to the filesystem.
+    expect(args[args.indexOf('--sandbox') + 1]).toBe('read-only');
+  });
+
+  it('keeps the Codex run isolated and parseable', () => {
+    const args = argsFor(new CliAdapter({ command: 'codex', variant: 'codex' }));
+
+    // Runs in a temp dir, so without this Codex refuses to start at all.
+    expect(args).toContain('--skip-git-repo-check');
+    // No session files, none of the user's own config.
+    expect(args).toContain('--ephemeral');
+    expect(args).toContain('--ignore-user-config');
+    // ANSI escapes would corrupt parsing.
+    expect(args[args.indexOf('--color') + 1]).toBe('never');
   });
 });
 
@@ -165,7 +183,7 @@ describe('subscription sign-in metadata', () => {
     // subscription. Naming the official command is the honest substitute.
     const expected: Record<string, string> = {
       'claude-code': 'claude',
-      codex: 'codex',
+      codex: 'codex login',
       'anthropic-oauth': 'ant auth login',
     };
 

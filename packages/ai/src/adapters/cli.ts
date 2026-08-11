@@ -18,10 +18,17 @@
  * send the user a meeting invite can put text into the prompt. Three rules keep
  * that from becoming code execution on the user's machine.
  *
- * 1. TOOLS OFF. Claude Code can read files and run shell commands. Handing it
- *    an injected prompt with tools enabled turns "someone sent me a calendar
- *    invite" into arbitrary code execution. `--tools ""` disables all of them.
- *    This is not a tuning knob — do not remove it.
+ * 1. TOOLS LOCKED DOWN. Both CLIs can read files and run shell commands.
+ *    Handing either an injected prompt with tools enabled turns "someone sent
+ *    me a calendar invite" into code execution. Neither flag is a tuning knob.
+ *
+ *    Claude Code: `--tools ""` removes tool access entirely.
+ *    Codex:       `--sandbox read-only` is the tightest setting it offers.
+ *
+ *    These are NOT equivalent, and the difference is worth knowing: Codex can
+ *    still run read-only shell commands, so the Codex path is a weaker
+ *    guarantee than the Claude Code one. It cannot modify the filesystem, but
+ *    it can look at it. Anyone treating them as interchangeable is wrong.
  *
  * 2. THE COMMAND IS NEVER USER INPUT. It comes from the fixed registry. A
  *    user-supplied binary path would be a remote-code-execution feature with a
@@ -35,6 +42,11 @@
  *    list, where any other user on the machine could read them.
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { readFile, unlink } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   AIAuthError,
   AIResponseError,
@@ -79,6 +91,63 @@ const EFFORT_BY_REASONING = {
   deep: 'high',
 } as const;
 
+/**
+ * Where these CLIs land when they are not on PATH.
+ *
+ * Codex's Windows installer puts `codex.exe` under LOCALAPPDATA and does not
+ * add it to PATH, so a perfectly working install looks missing to a bare
+ * `spawn('codex')`. Checking a handful of known locations turns "not installed"
+ * into "found it".
+ *
+ * These are fixed paths built from the OS's own directories — still nothing
+ * user-supplied, so rule 2 in the security note holds.
+ */
+function knownInstallPaths(variant: CliVariant): string[] {
+  const home = homedir();
+  const localAppData = join(home, 'AppData', 'Local');
+
+  if (variant === 'codex') {
+    return [
+      join(localAppData, 'OpenAI', 'Codex', 'bin', 'codex.exe'),
+      join(home, '.codex', 'bin', 'codex'),
+      join(home, '.local', 'bin', 'codex'),
+      '/usr/local/bin/codex',
+      '/opt/homebrew/bin/codex',
+    ];
+  }
+
+  return [
+    join(home, '.local', 'bin', 'claude.exe'),
+    join(home, '.local', 'bin', 'claude'),
+    join(localAppData, 'Programs', 'claude', 'claude.exe'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ];
+}
+
+/**
+ * Resolve to a known install location if one exists, else the bare name.
+ *
+ * Known locations win because they are the official installers' own paths and
+ * can be confirmed to exist; the bare name is the fallback that lets PATH do
+ * the work — which covers npm-installed copies and version managers. The two
+ * only disagree if a machine has both, which is rare and resolves toward the
+ * vendor's installer.
+ */
+export function resolveCommand(command: string, variant: CliVariant): string {
+  // Only substitute when the caller asked for this variant's own binary.
+  // Without this the known-paths lookup keys off the variant alone, so any
+  // command name at all would resolve to the installed CLI — which would make
+  // a typo silently launch the real thing.
+  const expected = variant === 'codex' ? 'codex' : 'claude';
+  if (command !== expected) return command;
+
+  for (const candidate of knownInstallPaths(variant)) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return command;
+}
+
 export interface CliAdapterOptions {
   /** Fixed by the registry. Never user input. */
   command: string;
@@ -102,12 +171,15 @@ export class CliAdapter implements AIProvider {
   readonly model: string;
 
   private readonly command: string;
+  /** Bare name, used in anything a human reads. */
+  private readonly displayName: string;
   private readonly variant: CliVariant;
   private readonly timeoutMs: number;
   private readonly cwd: string | undefined;
 
   constructor(options: CliAdapterOptions) {
-    this.command = options.command;
+    this.command = resolveCommand(options.command, options.variant);
+    this.displayName = options.command;
     this.variant = options.variant;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.cwd = options.cwd;
@@ -186,7 +258,7 @@ export class CliAdapter implements AIProvider {
    * Every element is a literal flag or an allowlisted value; the prompt itself
    * never appears here. See the security note at the top of the file.
    */
-  private buildArgs(spec: PromptSpec): string[] {
+  private buildArgs(spec: PromptSpec, outputFile?: string): string[] {
     const effort = EFFORT_BY_REASONING[spec.reasoning ?? 'normal'];
 
     if (this.variant === 'claude-code') {
@@ -210,21 +282,69 @@ export class CliAdapter implements AIProvider {
       return args;
     }
 
-    // Codex: `codex exec` is its documented non-interactive command. Kept
-    // minimal deliberately — this variant is unverified, and every flag added
-    // blind is a flag that can fail on a version we have not seen.
-    const args = ['exec'];
+    // Codex, verified against codex-cli 0.130.
+    const args = [
+      'exec',
+      // The counterpart to Claude Code's `--tools ""`. Codex has no way to turn
+      // tools off outright, so read-only is the tightest setting available: the
+      // model can still run shell commands, but cannot write to the filesystem.
+      // Worth stating plainly — this is a weaker guarantee than the Claude Code
+      // path, not an equivalent one.
+      '--sandbox',
+      'read-only',
+      // We run in a temp directory, and Codex refuses to start outside a git
+      // repo without this.
+      '--skip-git-repo-check',
+      // Leave nothing behind: no session files, and none of the user's own
+      // config. Auth still resolves, which is the point.
+      '--ephemeral',
+      '--ignore-user-config',
+      // Without this the output carries ANSI escapes, which corrupt parsing.
+      '--color',
+      'never',
+    ];
+
+    if (outputFile) args.push('--output-last-message', outputFile);
     if (this.model) args.push('--model', this.model);
     return args;
   }
 
   private async spawnCli(spec: PromptSpec): Promise<string> {
-    const args = this.buildArgs(spec);
+    // Codex writes its final answer to a file. Scraping stdout instead is not
+    // viable: a single run emits hundreds of kilobytes of progress logs and
+    // model-catalogue chatter, with the actual answer buried in it.
+    const outputFile =
+      this.variant === 'codex' ? join(tmpdir(), `fluid-codex-${randomUUID()}.txt`) : undefined;
+
+    try {
+      const stdout = await this.spawnProcess(spec, outputFile);
+
+      if (outputFile) {
+        const answer = await readFile(outputFile, 'utf8').catch(() => '');
+        if (answer.trim()) return answer;
+        // Fall through to stdout if the file is missing or empty, so a version
+        // that drops the flag degrades instead of failing outright.
+      }
+
+      return stdout;
+    } finally {
+      if (outputFile) await unlink(outputFile).catch(() => {});
+    }
+  }
+
+  private async spawnProcess(spec: PromptSpec, outputFile: string | undefined): Promise<string> {
+    const args = this.buildArgs(spec, outputFile);
 
     // Belt and braces: nothing should reach argv that fails the allowlist, so
     // if anything does, that is a bug and the request must not run.
+    //
+    // The one exemption is the output path, which is an absolute filename we
+    // built ourselves from `tmpdir()` and a UUID. It cannot satisfy the
+    // allowlist (drive letters and backslashes on Windows) and no part of it
+    // comes from the user, so it is compared by identity rather than pattern.
     for (const arg of args) {
-      if (arg !== '' && !arg.startsWith('--') && !SAFE_ARG.test(arg)) {
+      if (arg === '' || arg === outputFile || arg.startsWith('--')) continue;
+      if (!SAFE_ARG.test(arg)) {
         throw new AIResponseError('Refusing to launch the CLI with an unexpected argument.');
       }
     }
@@ -287,9 +407,9 @@ export class CliAdapter implements AIProvider {
         finish(
           error.code === 'ENOENT'
             ? new AIUnavailableError(
-                `\`${this.command}\` is not installed, or not on this server's PATH.`,
+                `\`${this.displayName}\` is not installed, or not on this server's PATH.`,
               )
-            : new AIUnavailableError(`Could not start \`${this.command}\`: ${error.message}`),
+            : new AIUnavailableError(`Could not start \`${this.displayName}\`: ${error.message}`),
         );
       });
 
@@ -301,8 +421,8 @@ export class CliAdapter implements AIProvider {
         const detail = (stderr || stdout).trim().slice(0, 400);
         finish(
           /not logged in|unauthor|authenticat|\/login/i.test(detail)
-            ? new AIAuthError(`${this.command} is not signed in. Run \`${this.command}\` once to log in.`)
-            : new AIUnavailableError(detail || `${this.command} exited with code ${code}.`),
+            ? new AIAuthError(`${this.displayName} is not signed in. Run \`${this.displayName}\` once to log in.`)
+            : new AIUnavailableError(detail || `${this.displayName} exited with code ${code}.`),
         );
       });
 
@@ -337,17 +457,29 @@ export class CliAdapter implements AIProvider {
     }
 
     const text = raw.trim();
-    if (!text) throw new AIResponseError(`${this.command} returned no content.`);
+    if (!text) throw new AIResponseError(`${this.displayName} returned no content.`);
     return text;
   }
 
   private async runStructured<T>(spec: PromptSpec): Promise<T> {
-    // Structured output is requested in the prompt and recovered leniently,
-    // rather than via a schema flag: a JSON schema on the command line would
-    // put braces and quotes into argv, which the security model above forbids.
+    // The schema goes in the prompt, not on the command line — a JSON schema in
+    // argv would mean braces and quotes there, which the security model forbids.
+    //
+    // Naming the exact properties is not optional. Asked only for "a single
+    // JSON object", these models return well-formed JSON with their own field
+    // names (`steps`/`label`/`estimate_minutes` instead of
+    // `subtasks`/`title`/`estimatedMinutes`), which parses fine and then fails
+    // every downstream check. The HTTP adapters get this enforcement from the
+    // provider; here it has to be asked for explicitly.
+    const schemaHint = spec.outputSchema
+      ? `\n\nThe object must match this JSON Schema exactly, using these exact property names:\n${JSON.stringify(spec.outputSchema)}`
+      : '';
+
     const text = await this.runText({
       ...spec,
-      system: `${spec.system}\n\nReply with a single JSON object and nothing else. No prose, no code fences.`,
+      system:
+        `${spec.system}\n\nReply with a single JSON object and nothing else. ` +
+        `No prose, no code fences.${schemaHint}`,
     });
 
     try {

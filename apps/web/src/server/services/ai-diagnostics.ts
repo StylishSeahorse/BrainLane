@@ -9,6 +9,7 @@
 import 'server-only';
 import { spawn } from 'node:child_process';
 import { getProvider, type ProviderDefinition } from '@fluid/ai';
+import { resolveCommand } from '@fluid/ai/adapters/cli';
 import { env } from '@fluid/env';
 import { prisma } from '@fluid/db';
 
@@ -28,26 +29,40 @@ export interface Readiness {
  * Runs `<command> --version`, which every one of these CLIs supports and which
  * costs nothing. The command comes from the registry, never from user input.
  */
-function commandExists(command: string, timeoutMs = 8_000): Promise<boolean> {
+function run(
+  command: string,
+  args: string[],
+  timeoutMs = 12_000,
+): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn(command, ['--version'], { shell: false, windowsHide: true });
+    const child = spawn(command, args, { shell: false, windowsHide: true });
+    let output = '';
 
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      resolve(false);
+      resolve({ code: -1, output });
     }, timeoutMs);
 
-    const settle = (value: boolean) => {
+    const settle = (code: number) => {
       clearTimeout(timer);
-      resolve(value);
+      resolve({ code, output });
     };
 
-    child.on('error', () => settle(false));
-    child.on('close', (code) => settle(code === 0));
-    // Nothing is read from stdout; draining prevents the pipe filling.
-    child.stdout.resume();
-    child.stderr.resume();
+    // Bounded: these commands print a line or two, but a wedged binary should
+    // not be able to fill memory.
+    const collect = (chunk: Buffer) => {
+      if (output.length < 8_000) output += chunk.toString('utf8');
+    };
+
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    child.on('error', () => settle(-1));
+    child.on('close', (code) => settle(code ?? -1));
   });
+}
+
+async function commandExists(command: string): Promise<boolean> {
+  return (await run(command, ['--version'], 8_000)).code === 0;
 }
 
 export async function checkReadiness(userId: string): Promise<Readiness> {
@@ -56,13 +71,33 @@ export async function checkReadiness(userId: string): Promise<Readiness> {
 
   // --- Providers backed by a local CLI ------------------------------------
   if (definition.protocol === 'cli' && definition.cli) {
-    const installed = await commandExists(definition.cli.command);
+    // Resolve the same way the adapter does. Codex's Windows installer does not
+    // put itself on PATH, so a bare name check would report a working install
+    // as missing.
+    const command = resolveCommand(definition.cli.command, definition.cli.variant);
+    const installed = await commandExists(command);
 
     if (!installed) {
       return {
         state: 'action-needed',
-        summary: `\`${definition.cli.command}\` is not installed, or not on this server's PATH.`,
+        summary: `\`${definition.cli.command}\` is not installed, or not where this server can find it.`,
         ...(definition.signIn?.install ? { installUrl: definition.signIn.install } : {}),
+      };
+    }
+
+    // Codex can answer "am I signed in?" for free. Spending tokens to discover
+    // a login problem would be a poor trade.
+    if (definition.cli.variant === 'codex') {
+      const status = await run(command, ['login', 'status']);
+
+      if (status.code === 0 && /logged in/i.test(status.output)) {
+        return { state: 'ready', summary: status.output.trim().slice(0, 120) };
+      }
+
+      return {
+        state: 'action-needed',
+        summary: 'Codex is installed but not signed in.',
+        ...(definition.signIn?.command ? { command: definition.signIn.command } : {}),
       };
     }
 

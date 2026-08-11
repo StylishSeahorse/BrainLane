@@ -218,14 +218,13 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     allowLocalhost: true,
     cli: { command: 'codex', variant: 'codex' },
     signIn: {
-      command: 'codex',
+      command: 'codex login',
       install: 'https://learn.chatgpt.com/docs/codex/cli',
       detail:
-        'Run it once and choose “Sign in with ChatGPT”. This app then reuses that session — the only sanctioned way to spend a ChatGPT subscription here, since OpenAI publishes no equivalent of Anthropic’s SDK-readable login profile.',
+        'Signs in with your ChatGPT account in a browser. This app then reuses that session — the only sanctioned way to spend a ChatGPT subscription here, since OpenAI publishes no equivalent of Anthropic’s SDK-readable login profile.',
     },
-    unverified: true,
     blurb:
-      'Sign in with your ChatGPT account. Runs through the Codex CLI on this machine — no API key, no second bill.',
+      'Sign in with your ChatGPT account. Runs through the Codex CLI on this machine — no API key, no second bill. Codex runs sandboxed read-only, so it can read but never write.',
   },
   {
     id: 'custom',
