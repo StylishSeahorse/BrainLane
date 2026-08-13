@@ -1,15 +1,17 @@
+import { expandLabeledRoutines, startOfLocalDay } from '@fluid/core';
 import {
   acceptPlanAction,
   acknowledgeAvoidance,
   breakdownTask,
   deferTask,
-  logTime,
   rebuildPlan,
   rejectPlanAction,
 } from '@/app/actions';
+import { LoggedActionButton } from '@/components/action-log';
+import { FocusTimer } from '@/components/focus-card';
 import { formatDay, formatDuration, formatTime, relativeDays } from '@/components/format';
 import { EnergyBadge, PageHeader, SectionTitle } from '@/components/page-header';
-import { WandIcon } from '@/components/icons';
+import { RoutineIcon, WandIcon } from '@/components/icons';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
@@ -33,30 +35,90 @@ export default async function TodayPage() {
   const dayEnd = new Date(now);
   dayEnd.setHours(23, 59, 59, 999);
 
-  const [{ blocks }, pending, runway, avoidance] = await Promise.all([
+  const dayStart = startOfLocalDay(now, timeZone);
+
+  const [{ blocks }, wholeDay, pending, runway, avoidance, routines] = await Promise.all([
     caller.plan.blocks({ from: now, to: dayEnd }),
+    // The whole day, not just what is left of it — "3 of 5 done" needs the
+    // sessions already behind us, which the `from: now` window excludes.
+    caller.plan.blocks({ from: dayStart, to: dayEnd }),
     caller.plan.pending(),
     caller.plan.runway(),
     caller.task.avoidance(),
+    caller.routine.list(),
   ]);
 
-  const current = blocks.find((block) => block.startsAt <= now && block.endsAt > now);
-  const next = blocks.find((block) => block.startsAt > now);
+  // A finished session is not a candidate for "do this now".
+  const live = blocks.filter((block) => block.state !== 'COMPLETED');
+  const current = live.find((block) => block.startsAt <= now && block.endsAt > now);
+  const next = live.find((block) => block.startsAt > now);
   const focus = current ?? next;
+
+  const doneToday = wholeDay.blocks.filter((block) => block.state === 'COMPLETED').length;
+  const totalToday = wholeDay.blocks.length;
+
+  // Same expansion the calendar and the scheduler use, narrowed to today.
+  const todaysRoutines = expandLabeledRoutines(
+    routines.flatMap((routine) =>
+      (routine.days ?? [null]).map((dayOfWeek) => ({
+        kind: 'ROUTINE' as const,
+        label: routine.label,
+        dayOfWeek,
+        startTime: routine.startTime,
+        endTime: routine.endTime,
+      })),
+    ),
+    { start: dayStart, end: dayEnd },
+    timeZone,
+  );
+
+  // One timeline for the rest of the day, so routines and scheduled work read
+  // as the single sequence they actually are rather than two lists to
+  // mentally interleave.
+  const upcoming = [
+    ...live
+      .filter((block) => block.id !== focus?.id)
+      .map((block) => ({
+        key: block.id,
+        at: block.startsAt,
+        title: block.task.title,
+        kind: 'block' as const,
+        state: block.state,
+        energy: block.task.energy,
+      })),
+    ...todaysRoutines
+      .filter((routine) => routine.end > now)
+      .map((routine) => ({
+        key: `routine-${routine.label}-${routine.start.toISOString()}`,
+        at: routine.start,
+        title: routine.label,
+        kind: 'routine' as const,
+        state: null,
+        energy: null,
+      })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
   return (
     <>
       <PageHeader
         eyebrow="Right now"
         title="Today"
-        subtitle={formatDay(now, timeZone)}
+        subtitle={
+          totalToday > 0
+            ? `${formatDay(now, timeZone)} · ${doneToday} of ${totalToday} session${totalToday === 1 ? '' : 's'} done`
+            : formatDay(now, timeZone)
+        }
         action={
-          <form action={rebuildPlan}>
-            <button type="submit" className="btn btn-sm btn-outline gap-1.5 rounded-xl">
-              <WandIcon />
-              Re-plan
-            </button>
-          </form>
+          <LoggedActionButton
+            action={rebuildPlan}
+            fields={{}}
+            successMessage="Re-planned your day."
+            pendingLabel="Re-planning…"
+            className="btn btn-sm btn-outline gap-1.5 rounded-xl"
+          >
+            <WandIcon />
+            Re-plan
+          </LoggedActionButton>
         }
       />
 
@@ -90,18 +152,24 @@ export default async function TodayPage() {
             </ul>
 
             <div className="card-actions">
-              <form action={acceptPlanAction}>
-                <input type="hidden" name="planVersionId" value={pending.id} />
-                <button type="submit" className="btn btn-primary btn-sm rounded-xl">
-                  Accept
-                </button>
-              </form>
-              <form action={rejectPlanAction}>
-                <input type="hidden" name="planVersionId" value={pending.id} />
-                <button type="submit" className="btn btn-ghost btn-sm">
-                  Keep what I had
-                </button>
-              </form>
+              <LoggedActionButton
+                action={acceptPlanAction}
+                fields={{ planVersionId: pending.id }}
+                successMessage="Accepted the new plan."
+                pendingLabel="Accepting…"
+                className="btn btn-primary btn-sm rounded-xl"
+              >
+                Accept
+              </LoggedActionButton>
+              <LoggedActionButton
+                action={rejectPlanAction}
+                fields={{ planVersionId: pending.id }}
+                successMessage="Kept the plan you already had."
+                pendingLabel="Keeping…"
+                className="btn btn-ghost btn-sm"
+              >
+                Keep what I had
+              </LoggedActionButton>
             </div>
           </div>
         </section>
@@ -130,32 +198,49 @@ export default async function TodayPage() {
             </div>
 
             {/*
+              The starter step, when the AI has produced one. It is the single
+              most useful thing on this screen for a task that will not start,
+              and until now it was only visible on the Tasks page — the one
+              place someone in that state is least likely to be looking.
+            */}
+            {focus.task.starterStep ? (
+              <div className="bg-accent/8 border-accent rounded-r-lg border-l-[3px] px-3 py-2 text-sm">
+                <span className="font-semibold">Start here:</span> {focus.task.starterStep}
+              </div>
+            ) : null}
+
+            {/*
               "Just start": a five-minute version with nothing attached.
               Initiation is the barrier, so the offer has to be smaller than the
               resistance to it — and it must be the biggest button on the screen.
             */}
-            <div className="card-actions mt-1 flex-col gap-2 sm:flex-row">
-              <form action={logTime} className="w-full sm:w-auto">
-                <input type="hidden" name="id" value={focus.task.id} />
-                <input type="hidden" name="minutes" value="5" />
-                <button type="submit" className="btn btn-primary w-full sm:w-auto">
-                  Just start — 5 minutes
-                </button>
-              </form>
-              <form action={breakdownTask} className="w-full sm:w-auto">
-                <input type="hidden" name="id" value={focus.task.id} />
-                <input type="hidden" name="granularity" value="tiny" />
-                <button type="submit" className="btn btn-outline btn-sm w-full sm:w-auto">
-                  Too big — break it down
-                </button>
-              </form>
-              <form action={deferTask} className="w-full sm:w-auto">
-                <input type="hidden" name="id" value={focus.task.id} />
-                <input type="hidden" name="days" value="1" />
-                <button type="submit" className="btn btn-ghost btn-sm w-full sm:w-auto">
-                  Not today
-                </button>
-              </form>
+            <div className="mt-1">
+              <FocusTimer
+                taskId={focus.task.id}
+                taskTitle={focus.task.title}
+                startedAt={focus.task.timerStartedAt}
+              />
+            </div>
+
+            <div className="card-actions flex-col gap-2 sm:flex-row">
+              <LoggedActionButton
+                action={breakdownTask}
+                fields={{ id: focus.task.id, granularity: 'tiny' }}
+                successMessage={`Broke "${focus.task.title}" into smaller steps.`}
+                pendingLabel="Thinking…"
+                className="btn btn-outline btn-sm w-full sm:w-auto"
+              >
+                Too big — break it down
+              </LoggedActionButton>
+              <LoggedActionButton
+                action={deferTask}
+                fields={{ id: focus.task.id, days: '1' }}
+                successMessage={`Moved "${focus.task.title}" to tomorrow.`}
+                pendingLabel="Deferring…"
+                className="btn btn-ghost btn-sm w-full sm:w-auto"
+              >
+                Not today
+              </LoggedActionButton>
             </div>
           </div>
         </section>
@@ -245,19 +330,23 @@ export default async function TodayPage() {
                   </p>
 
                   <div className="card-actions">
-                    <form action={breakdownTask}>
-                      <input type="hidden" name="id" value={task.id} />
-                      <input type="hidden" name="granularity" value="tiny" />
-                      <button type="submit" className="btn btn-outline btn-sm">
-                        Shrink it
-                      </button>
-                    </form>
-                    <form action={acknowledgeAvoidance}>
-                      <input type="hidden" name="id" value={task.id} />
-                      <button type="submit" className="btn btn-ghost btn-sm">
-                        Leave it for now
-                      </button>
-                    </form>
+                    <LoggedActionButton
+                      action={breakdownTask}
+                      fields={{ id: task.id, granularity: 'tiny' }}
+                      successMessage={`Broke "${task.title}" into smaller steps.`}
+                      pendingLabel="Thinking…"
+                      className="btn btn-outline btn-sm"
+                    >
+                      Shrink it
+                    </LoggedActionButton>
+                    <LoggedActionButton
+                      action={acknowledgeAvoidance}
+                      fields={{ id: task.id }}
+                      successMessage={`Left "${task.title}" for now.`}
+                      className="btn btn-ghost btn-sm"
+                    >
+                      Leave it for now
+                    </LoggedActionButton>
                   </div>
                 </div>
               </section>
@@ -267,26 +356,36 @@ export default async function TodayPage() {
       ) : null}
 
       {/* --- The rest of today ---------------------------------------------- */}
-      {blocks.length > 1 ? (
+      {upcoming.length > 0 ? (
         <>
           <SectionTitle>Rest of today</SectionTitle>
           <ul className="card bg-base-100 border-base-200 divide-base-200 divide-y border shadow-sm">
-            {blocks
-              .filter((block) => block.id !== focus?.id)
-              .map((block) => (
-                <li key={block.id} className="flex items-center gap-3 px-5 py-3">
-                  <span className="text-base-content/50 w-12 shrink-0 font-mono text-xs">
-                    {formatTime(block.startsAt, timeZone)}
+            {upcoming.map((entry) => (
+              <li key={entry.key} className="flex items-center gap-3 px-5 py-3">
+                <span className="text-base-content/50 w-12 shrink-0 font-mono text-xs">
+                  {formatTime(entry.at, timeZone)}
+                </span>
+
+                {entry.kind === 'routine' ? (
+                  <span className="text-base-content/35 shrink-0" aria-hidden="true">
+                    <RoutineIcon className="size-3.5" />
                   </span>
-                  <span className="min-w-0 grow truncate text-sm font-medium">
-                    {block.task.title}
-                  </span>
-                  <EnergyBadge energy={block.task.energy} />
-                  {block.state === 'PROPOSED' ? (
-                    <span className="badge badge-sm badge-soft badge-warning">proposed</span>
-                  ) : null}
-                </li>
-              ))}
+                ) : null}
+
+                <span
+                  className={`min-w-0 grow truncate text-sm ${
+                    entry.kind === 'routine' ? 'text-base-content/55' : 'font-medium'
+                  }`}
+                >
+                  {entry.title}
+                </span>
+
+                {entry.energy ? <EnergyBadge energy={entry.energy} /> : null}
+                {entry.state === 'PROPOSED' ? (
+                  <span className="badge badge-sm badge-soft badge-warning">proposed</span>
+                ) : null}
+              </li>
+            ))}
           </ul>
         </>
       ) : null}

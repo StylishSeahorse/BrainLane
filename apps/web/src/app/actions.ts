@@ -126,7 +126,7 @@ export async function createTask(_state: ActionState, formData: FormData): Promi
     return { error: messageFrom(error, 'Could not add that task.') };
   }
 
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
   revalidatePath('/today');
   return {};
 }
@@ -134,14 +134,71 @@ export async function createTask(_state: ActionState, formData: FormData): Promi
 export async function completeTask(formData: FormData): Promise<void> {
   const caller = await getCaller();
   await caller.task.complete({ id: String(formData.get('id')) });
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
   revalidatePath('/today');
+}
+
+/** The `FormData` shape, for buttons that submit fields rather than an id. */
+export async function uncompleteTaskAction(formData: FormData): Promise<{ error?: string }> {
+  return uncompleteTask(String(formData.get('id')));
+}
+
+/** Reverses `completeTask`, including the side effects completing it had. */
+export async function uncompleteTask(taskId: string): Promise<{ error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    await caller.task.uncomplete({ id: taskId });
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not bring that task back.') };
+  }
+
+  revalidatePath('/projects');
+  revalidatePath('/today');
+  return {};
+}
+
+export interface TaskEdit {
+  id: string;
+  title: string;
+  notes: string;
+  projectId: string | null;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  energy: 'LOW' | 'MEDIUM' | 'HIGH';
+  estimateMinutes: number;
+  /** `datetime-local` string, or empty to clear the deadline. */
+  deadline: string;
+  isSplittable: boolean;
+}
+
+export async function updateTaskDetails(input: TaskEdit): Promise<{ error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    await caller.task.update({
+      id: input.id,
+      title: input.title,
+      notes: input.notes.trim() || undefined,
+      projectId: input.projectId,
+      priority: input.priority,
+      energy: input.energy,
+      estimateMinutes: input.estimateMinutes,
+      deadline: input.deadline ? new Date(input.deadline) : null,
+      isSplittable: input.isSplittable,
+    });
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not save those changes.') };
+  }
+
+  revalidatePath('/projects');
+  revalidatePath('/today');
+  return {};
 }
 
 export async function deleteTask(formData: FormData): Promise<void> {
   const caller = await getCaller();
   await caller.task.delete({ id: String(formData.get('id')) });
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
 }
 
 export async function deferTask(formData: FormData): Promise<void> {
@@ -150,7 +207,7 @@ export async function deferTask(formData: FormData): Promise<void> {
     id: String(formData.get('id')),
     days: Number(formData.get('days') ?? 1),
   });
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
   revalidatePath('/today');
 }
 
@@ -160,7 +217,7 @@ export async function breakdownTask(formData: FormData): Promise<void> {
     id: String(formData.get('id')),
     granularity: (formData.get('granularity') as 'tiny' | 'normal') ?? 'tiny',
   });
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
   revalidatePath('/today');
 }
 
@@ -177,7 +234,7 @@ export async function logTime(formData: FormData): Promise<void> {
     minutes: Number(formData.get('minutes') ?? 5),
   });
   revalidatePath('/today');
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +254,7 @@ export async function createProject(
   } catch (error) {
     return { error: messageFrom(error, 'Could not create that project.') };
   }
-  revalidatePath('/tasks');
+  revalidatePath('/projects');
   return {};
 }
 
@@ -427,4 +484,92 @@ export async function resumeCalendarSync(formData: FormData): Promise<void> {
   const caller = await getCaller();
   await caller.calendar.resume({ connectionId: String(formData.get('connectionId')) });
   revalidatePath('/settings');
+}
+
+// ---------------------------------------------------------------------------
+// Dragging a block on the calendar grid
+// ---------------------------------------------------------------------------
+
+export async function moveScheduledBlock(input: {
+  blockId: string;
+  startsAt: Date;
+  endsAt: Date;
+}): Promise<{ error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    await caller.plan.moveBlock(input);
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not move that block.') };
+  }
+
+  revalidatePath('/calendar');
+  return {};
+}
+
+// ---------------------------------------------------------------------------
+// Task timers
+// ---------------------------------------------------------------------------
+
+export async function startTaskTimer(
+  taskId: string,
+): Promise<{ startedAt?: Date; switchedFrom?: string | null; error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    const result = await caller.task.startTimer({ id: taskId });
+    revalidatePath('/projects');
+    revalidatePath('/today');
+    return { startedAt: result.startedAt, switchedFrom: result.switchedFrom };
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not start the timer.') };
+  }
+}
+
+export async function stopTaskTimer(taskId: string): Promise<{ minutes?: number; error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    const result = await caller.task.stopTimer({ id: taskId });
+    revalidatePath('/projects');
+    revalidatePath('/today');
+    return { minutes: result.minutes };
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not stop the timer.') };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Routines
+// ---------------------------------------------------------------------------
+
+export async function createRoutine(input: {
+  label: string;
+  startTime: string;
+  endTime: string;
+  days: number[];
+}): Promise<{ error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    await caller.routine.create(input);
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not add that routine.') };
+  }
+
+  revalidatePath('/calendar');
+  return {};
+}
+
+export async function deleteRoutine(formData: FormData): Promise<{ error?: string }> {
+  const caller = await getCaller();
+
+  try {
+    await caller.routine.delete({ groupId: String(formData.get('groupId')) });
+  } catch (error) {
+    return { error: messageFrom(error, 'Could not remove that routine.') };
+  }
+
+  revalidatePath('/calendar');
+  return {};
 }

@@ -146,6 +146,50 @@ export function expandProtectedTimes(
   return mergeIntervals(intervals);
 }
 
+export interface LabeledInterval extends Interval {
+  label: string;
+}
+
+/**
+ * Like `expandProtectedTimes`, but for showing routines rather than enforcing
+ * them.
+ *
+ * The scheduler-facing version merges overlapping rules into anonymous
+ * blocked intervals — correct for "is this time available", meaningless for
+ * "what is this". Rendering "Lunch" and "Brush teeth" needs to know which
+ * rule produced which interval, so this keeps them separate and labeled
+ * instead of merging.
+ */
+export function expandLabeledRoutines(
+  rules: ProtectedTimeRule[],
+  bounds: Interval,
+  timeZone: string,
+): LabeledInterval[] {
+  const results: LabeledInterval[] = [];
+
+  for (const rule of rules) {
+    const label = rule.label ?? 'Protected time';
+
+    if (rule.start && rule.end) {
+      const clamped = clamp({ start: rule.start, end: rule.end }, bounds);
+      if (clamped) results.push({ ...clamped, label });
+      continue;
+    }
+
+    if (rule.startTime && rule.endTime) {
+      for (const interval of expandDailyRule(
+        { dayOfWeek: rule.dayOfWeek, startTime: rule.startTime, endTime: rule.endTime },
+        bounds,
+        timeZone,
+      )) {
+        results.push({ ...interval, label });
+      }
+    }
+  }
+
+  return results.sort((a, b) => a.start.getTime() - b.start.getTime());
+}
+
 export interface EnergyMap {
   /** Energy level windows, expanded to instants. */
   windows: Array<Interval & { level: EnergyLevel }>;

@@ -50,6 +50,20 @@ export interface ProviderDefinition {
   /** Shown as a caveat in the UI when we have not verified the integration. */
   unverified?: boolean;
   /**
+   * A curated dropdown of model choices, for a `protocol: 'cli'` provider.
+   *
+   * There is no `GET /models` for a locally spawned CLI the way there is for
+   * an HTTP provider, so a live-fetched list (the approach everywhere else in
+   * this file) is not available here. This is the one place a model list is
+   * hand-maintained — and it must stay narrow: only the CLI's own documented,
+   * version-agnostic aliases belong here (Claude Code's `--help` names
+   * `sonnet`/`opus`/`haiku` as its supported alias set), never a dated
+   * specific model id, which would go stale exactly the way a hardcoded API
+   * catalog would. A provider with nothing verified simply omits this field
+   * and falls back to the free-text model input.
+   */
+  cliModelOptions?: Array<{ value: string; label: string }>;
+  /**
    * Providers authenticated by an external sign-in rather than a key.
    *
    * Neither Anthropic nor OpenAI offers a public OAuth client that lets a
@@ -206,6 +220,15 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     // An alias rather than a pinned version, so it follows whatever the CLI
     // currently considers current.
     defaultModel: 'sonnet',
+    // Straight from `claude --help`'s own description of `--model`: "Provide
+    // an alias for the latest model (e.g. 'sonnet' or 'opus')". Haiku
+    // completes the documented three-tier set. Verified against a live
+    // install, not assumed.
+    cliModelOptions: [
+      { value: 'sonnet', label: 'Sonnet — balanced default' },
+      { value: 'opus', label: 'Opus — most capable, slower' },
+      { value: 'haiku', label: 'Haiku — fastest, lightest' },
+    ],
     blurb:
       'Sign in with your Claude account. Runs through the Claude Code CLI on this machine — no API key, no second bill.',
   },
@@ -223,6 +246,11 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
       detail:
         'Signs in with your ChatGPT account in a browser. This app then reuses that session — the only sanctioned way to spend a ChatGPT subscription here, since OpenAI publishes no equivalent of Anthropic’s SDK-readable login profile.',
     },
+    // No `cliModelOptions`: unlike Claude Code, `codex --help` documents no
+    // alias set — `-m/--model` takes an arbitrary string with nothing to
+    // enumerate it against. Offering a guessed list here would be exactly the
+    // stale-hardcoded-catalog problem this field exists to avoid; the
+    // free-text input is the honest option until Codex documents one.
     blurb:
       'Sign in with your ChatGPT account. Runs through the Codex CLI on this machine — no API key, no second bill. Codex runs sandboxed read-only, so it can read but never write.',
   },

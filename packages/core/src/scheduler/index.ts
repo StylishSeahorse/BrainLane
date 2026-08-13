@@ -5,10 +5,12 @@ export {
   buildEnergyMap,
   energyAt,
   energySatisfies,
+  expandLabeledRoutines,
   expandProtectedTimes,
   type Availability,
   type AvailabilityInput,
   type EnergyMap,
+  type LabeledInterval,
 } from './availability';
 export {
   alignUp,

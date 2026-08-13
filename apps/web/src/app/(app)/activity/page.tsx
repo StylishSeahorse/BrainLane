@@ -4,6 +4,7 @@ import {
   rejectAiActionAction,
   revertAiActionAction,
 } from '@/app/actions';
+import { LoggedActionButton } from '@/components/action-log';
 import { formatTime } from '@/components/format';
 import { PageHeader } from '@/components/page-header';
 import { WandIcon } from '@/components/icons';
@@ -68,12 +69,16 @@ export default async function ActivityPage() {
           </>
         }
         action={
-          <form action={reflowSchedule}>
-            <button type="submit" className="btn btn-sm btn-outline gap-1.5 rounded-xl">
-              <WandIcon />
-              Let the AI reflow
-            </button>
-          </form>
+          <LoggedActionButton
+            action={reflowSchedule}
+            fields={{}}
+            successMessage="Reflowed the schedule."
+            pendingLabel="Reflowing…"
+            className="btn btn-sm btn-outline gap-1.5 rounded-xl"
+          >
+            <WandIcon />
+            Let the AI reflow
+          </LoggedActionButton>
         }
       />
 
@@ -121,28 +126,37 @@ export default async function ActivityPage() {
                   {undoOpen || action.status === 'PROPOSED' ? (
                     <div className="card-actions mt-1">
                       {undoOpen ? (
-                        <form action={revertAiActionAction}>
-                          <input type="hidden" name="id" value={action.id} />
-                          <button type="submit" className="btn btn-outline btn-xs">
-                            Undo this
-                          </button>
-                        </form>
+                        <LoggedActionButton
+                          action={revertAiActionAction}
+                          fields={{ id: action.id }}
+                          successMessage={`Undid: ${KIND_LABEL[action.kind] ?? action.kind}.`}
+                          pendingLabel="Undoing…"
+                          className="btn btn-outline btn-xs"
+                        >
+                          Undo this
+                        </LoggedActionButton>
                       ) : null}
 
                       {action.status === 'PROPOSED' ? (
                         <>
-                          <form action={confirmAiActionAction}>
-                            <input type="hidden" name="id" value={action.id} />
-                            <button type="submit" className="btn btn-primary btn-xs">
-                              Do it
-                            </button>
-                          </form>
-                          <form action={rejectAiActionAction}>
-                            <input type="hidden" name="id" value={action.id} />
-                            <button type="submit" className="btn btn-ghost btn-xs">
-                              No thanks
-                            </button>
-                          </form>
+                          <LoggedActionButton
+                            action={confirmAiActionAction}
+                            fields={{ id: action.id }}
+                            successMessage="Applied that change."
+                            pendingLabel="Applying…"
+                            className="btn btn-primary btn-xs"
+                          >
+                            Do it
+                          </LoggedActionButton>
+                          <LoggedActionButton
+                            action={rejectAiActionAction}
+                            fields={{ id: action.id }}
+                            successMessage="Dismissed that proposal."
+                            pendingLabel="Dismissing…"
+                            className="btn btn-ghost btn-xs"
+                          >
+                            No thanks
+                          </LoggedActionButton>
                         </>
                       ) : null}
                     </div>

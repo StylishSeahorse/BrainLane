@@ -187,3 +187,93 @@
   border-left-color: var(--color-base-300);
   background-color: var(--color-base-200);
 }
+
+/* Recurring life — brush teeth, lunch — shown, but visually quieter than both
+   the plan (primary) and real external commitments (solid grey): a fine
+   hatch rather than a fill, and no time label, since a routine repeats and
+   reading its exact minute is rarely the point. */
+.cal-evt-routine {
+  border-left-color: var(--color-base-content);
+  border-left-style: dotted;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    color-mix(in oklab, var(--color-base-content) 6%, transparent) 4px,
+    color-mix(in oklab, var(--color-base-content) 6%, transparent) 8px
+  );
+  color: var(--color-base-content);
+  opacity: 0.6;
+  font-size: 0.65rem;
+}
+
+/* A block the user may pick up and move. Only ACCEPTED blocks get this. */
+.cal-evt-draggable {
+  cursor: grab;
+}
+
+/* Mid-drag, at its origin: present but out of the way, so the destination is
+   what draws the eye rather than the block seeming to be in two places. */
+.cal-evt-lifted {
+  opacity: 0.35;
+  cursor: grabbing;
+}
+
+/* Where a block would land if dropped now. Dashed, not filled — a firm
+   commitment reads as a solid block, and this is not one yet. */
+.cal-evt-preview {
+  position: absolute;
+  left: 0.3rem;
+  right: 0.3rem;
+  border: 2px dashed var(--color-primary);
+  border-radius: 0.5rem;
+  background-color: color-mix(in oklab, var(--color-primary) 14%, transparent);
+  pointer-events: none;
+}
+
+/* A grabbable edge for changing duration. Sized to the block's own bounds but
+   given a taller invisible hit area via negative margins — a 15-minute block
+   is only a few pixels tall on screen, and a handle that stopped exactly at
+   its border would be nearly impossible to grab with a mouse. */
+.cal-resize-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  cursor: ns-resize;
+  /* Prevents the browser's own touch-scroll gesture from competing with a
+     pointer-driven resize on a touchscreen. */
+  touch-action: none;
+}
+
+.cal-resize-handle-top {
+  top: -5px;
+}
+
+.cal-resize-handle-bottom {
+  bottom: -5px;
+}
+
+/* The visible grip line, shown only on hover/focus so a compact block is not
+   cluttered with two bars by default. */
+.cal-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 3px;
+  border-radius: 2px;
+  background-color: var(--color-primary);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.1s ease;
+}
+
+.cal-evt-draggable:hover .cal-resize-handle::after {
+  opacity: 0.45;
+}
+
+.cal-resize-handle:hover::after {
+  opacity: 0.8;
+}

@@ -21,6 +21,70 @@ export interface ProviderOption {
   isCli: boolean;
   unverified: boolean;
   signIn: { command: string; install?: string; detail: string } | null;
+  /** Curated model choices for a CLI provider. Null when none are verified. */
+  cliModelOptions: { value: string; label: string }[] | null;
+}
+
+const CUSTOM_MODEL = '__custom__';
+
+/**
+ * The model field for a CLI provider with a curated list.
+ *
+ * `key={provider.id}` on the call site is load-bearing: it forces this to
+ * remount — and its `useState` initializers to re-run — whenever the provider
+ * selection changes, the same way the parent form already resets `models` and
+ * `testResult`. Without it, switching from one CLI provider to another would
+ * keep showing the previous provider's preset list.
+ *
+ * Both inputs share `name="model"` and stay mounted the whole time; only
+ * `disabled` toggles between them; a disabled control is excluded from
+ * `FormData` entirely, so exactly one of the two ever actually submits.
+ * Keeping the free-text input mounted (rather than swapping it in and out)
+ * means anything already typed into it survives flipping back and forth.
+ */
+function CliModelField({ provider, currentModel }: { provider: ProviderOption; currentModel: string }) {
+  const presets = provider.cliModelOptions ?? [];
+  const matchesPreset = presets.some((option) => option.value === currentModel);
+
+  const [mode, setMode] = useState<'preset' | 'custom'>(
+    matchesPreset || currentModel === '' ? 'preset' : 'custom',
+  );
+  const [selectValue, setSelectValue] = useState(
+    matchesPreset ? currentModel : provider.defaultModel || presets[0]?.value || '',
+  );
+
+  return (
+    <div className="space-y-2">
+      <select
+        className="select w-full"
+        value={mode === 'preset' ? selectValue : CUSTOM_MODEL}
+        onChange={(event) => {
+          if (event.target.value === CUSTOM_MODEL) {
+            setMode('custom');
+          } else {
+            setMode('preset');
+            setSelectValue(event.target.value);
+          }
+        }}
+      >
+        {presets.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+        <option value={CUSTOM_MODEL}>Custom — type an exact model name</option>
+      </select>
+
+      <input type="hidden" name="model" value={selectValue} disabled={mode !== 'preset'} />
+      <input
+        name="model"
+        defaultValue={mode === 'custom' ? currentModel : ''}
+        placeholder="e.g. claude-sonnet-4-6"
+        className={`input w-full font-mono text-sm ${mode === 'custom' ? '' : 'hidden'}`}
+        disabled={mode !== 'custom'}
+      />
+    </div>
+  );
 }
 
 export interface CurrentAiSettings {
@@ -248,34 +312,50 @@ export function AiProviderForm({
 
         <fieldset className="fieldset">
           <legend className="fieldset-legend">Model</legend>
-          <input
-            name="model"
-            list="ai-model-options"
-            defaultValue={current.model}
-            placeholder={provider.defaultModel || 'Model name'}
-            className="input w-full font-mono text-sm"
-          />
-          <datalist id="ai-model-options">
-            {models.map((model) => (
-              <option key={model} value={model} />
-            ))}
-          </datalist>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {provider.supportsModelListing ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={loadModels}
-                disabled={busy}
-              >
-                {models.length > 0 ? `${models.length} models loaded` : 'Load available models'}
-              </button>
-            ) : null}
-            <span className="text-base-content/40 text-xs">
-              Any model name works — the list is fetched from the provider, not baked in.
-            </span>
-          </div>
+          {provider.cliModelOptions && provider.cliModelOptions.length > 0 ? (
+            <>
+              <CliModelField key={provider.id} provider={provider} currentModel={current.model} />
+              <p className="label text-xs">
+                Straight from <code className="font-mono">{provider.id === 'codex' ? 'codex' : 'claude'} --help</code>
+                {' '}— an alias the CLI resolves itself, so it keeps working without this app tracking
+                version names.
+              </p>
+            </>
+          ) : (
+            <>
+              <input
+                name="model"
+                list="ai-model-options"
+                defaultValue={current.model}
+                placeholder={provider.defaultModel || 'Model name'}
+                className="input w-full font-mono text-sm"
+              />
+              <datalist id="ai-model-options">
+                {models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {provider.supportsModelListing ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={loadModels}
+                    disabled={busy}
+                  >
+                    {models.length > 0 ? `${models.length} models loaded` : 'Load available models'}
+                  </button>
+                ) : null}
+                <span className="text-base-content/40 text-xs">
+                  {provider.isCli
+                    ? 'No verified list for this CLI yet — type the exact model name it expects.'
+                    : 'Any model name works — the list is fetched from the provider, not baked in.'}
+                </span>
+              </div>
+            </>
+          )}
         </fieldset>
 
         <div className="divider my-0" />

@@ -24,6 +24,7 @@ import {
   type SchedulableTask,
 } from '@fluid/core';
 import { prisma, type AiActionKind, type AiActionStatus } from '@fluid/db';
+import { applyAiOrderingHint, consentFrom } from './ai-scheduler';
 
 export interface ReflowResult {
   batchId: string;
@@ -34,6 +35,8 @@ export interface ReflowResult {
   scope: ActionScope;
   /** Seconds the undo stays open. 0 when the level does not use an undo window. */
   undoWindowSeconds: number;
+  /** Whether an AI ordering hint influenced which task got the best slot. */
+  usedAi: boolean;
 }
 
 /**
@@ -70,7 +73,7 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
     await Promise.all([
       prisma.user.findUniqueOrThrow({
         where: { id: userId },
-        include: { preferences: true },
+        include: { preferences: true, aiSetting: true },
       }),
       prisma.task.findMany({
         where: { userId, status: { in: ['READY', 'IN_PROGRESS'] }, completedAt: null },
@@ -132,11 +135,24 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
 
   const window = scopeWindow(context);
 
+  // The AI never chooses a time — only which of these tasks gets first pick
+  // of the best slot. See ai-scheduler.ts for why: a proposal is validated as
+  // an ordering hint, never as an authority on where time exists.
+  const ordering = await applyAiOrderingHint({
+    userId,
+    now,
+    timeZone: user.timeZone,
+    workingHoursCount: workingHours.length,
+    tasks: schedulable,
+    rawTasks: tasks,
+    consent: consentFrom(user.aiSetting),
+  });
+
   const desired = runScheduler({
     now,
     timeZone: user.timeZone,
     horizonDays: scope === 'TODAY' ? 1 : 7,
-    tasks: schedulable,
+    tasks: ordering.tasks,
     busy: context.external,
     pinned: context.ownedBlocks
       .filter((block) => block.isPinned)
@@ -167,6 +183,10 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
 
   // --- Turn the difference into discrete actions ---------------------------
   const actions: CalendarAction[] = [];
+  // Keyed by action identity rather than task id: a rationale belongs to
+  // whichever single action this pass produces for that task, and object
+  // identity is unambiguous where a taskId could in principle recur.
+  const aiRationales = new Map<CalendarAction, string>();
   const movable = context.ownedBlocks.filter(
     (block) => !block.isPinned && block.start >= window.start && block.end <= window.end,
   );
@@ -183,14 +203,18 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
       (block) => block.taskId === wanted.taskId && !claimed.has(block.blockId),
     );
 
+    const rationale = ordering.rationales.get(wanted.taskId);
+
     if (!existing) {
-      actions.push({
+      const action: CalendarAction = {
         type: 'CREATE_BLOCK',
         taskId: wanted.taskId,
         start: wanted.start,
         end: wanted.end,
         reason: `Scheduled to fit around your other commitments (${trigger.replace(/_/g, ' ')}).`,
-      });
+      };
+      actions.push(action);
+      if (rationale) aiRationales.set(action, rationale);
       continue;
     }
 
@@ -200,22 +224,25 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
     const sameEnd = existing.end.getTime() === wanted.end.getTime();
     if (sameStart && sameEnd) continue; // Nothing to do — stability preserved.
 
+    let action: CalendarAction;
     if (sameStart) {
-      actions.push({
+      action = {
         type: 'RESIZE_BLOCK',
         blockId: existing.blockId,
         end: wanted.end,
         reason: 'Length adjusted to match the time this still needs.',
-      });
+      };
     } else {
-      actions.push({
+      action = {
         type: 'MOVE_BLOCK',
         blockId: existing.blockId,
         start: wanted.start,
         end: wanted.end,
         reason: `Moved to keep the day workable (${trigger.replace(/_/g, ' ')}).`,
-      });
+      };
     }
+    actions.push(action);
+    if (rationale) aiRationales.set(action, rationale);
   }
 
   // A block the new plan no longer wants is proposed for removal — never
@@ -275,8 +302,14 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
         blockId,
         taskId,
         reason: outcome.action.reason,
+        // A boundary explanation always wins when there is one — a "your
+        // working hours" notice matters more than the AI's stylistic reason
+        // for the ordering. Otherwise, an AI rationale is shown as the "why",
+        // exactly where the activity feed already renders one.
         explanation:
-          outcome.verdict.decision === 'ALLOW' ? null : outcome.verdict.explanation,
+          outcome.verdict.decision === 'ALLOW'
+            ? (aiRationales.get(outcome.action) ?? null)
+            : outcome.verdict.explanation,
         boundary: outcome.verdict.decision === 'ALLOW' ? null : outcome.verdict.boundary,
         beforeState: beforeState ?? undefined,
         afterState:
@@ -312,7 +345,16 @@ export async function reflow(userId: string, trigger: string): Promise<ReflowRes
     });
   }
 
-  return { batchId, applied, proposed, blocked, autonomy, scope, undoWindowSeconds };
+  return {
+    batchId,
+    applied,
+    proposed,
+    blocked,
+    autonomy,
+    scope,
+    undoWindowSeconds,
+    usedAi: ordering.usedAi,
+  };
 }
 
 /**

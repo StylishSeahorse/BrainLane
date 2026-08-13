@@ -1,4 +1,5 @@
 import 'server-only';
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { prisma } from '@fluid/db';
 import { minutesBetween } from '@fluid/core';
@@ -66,6 +67,8 @@ export const planRouter = router({
                 title: true,
                 energy: true,
                 priority: true,
+                timerStartedAt: true,
+                starterStep: true,
                 project: { select: { name: true, color: true } },
               },
             },
@@ -86,6 +89,54 @@ export const planRouter = router({
       ]);
 
       return { blocks, events };
+    }),
+
+  /**
+   * Move a block by hand — dragging it on the calendar grid.
+   *
+   * Deliberately not routed through the AI action validator: that gate exists
+   * to constrain what the *AI* may decide on its own, and its boundaries
+   * (protected time, working hours, double-booking) are about second-guessing
+   * an autonomous choice. A person dragging their own block is the opposite —
+   * a deliberate, first-party decision — so the only checks here are
+   * structural: it is theirs, it is committed (not still a proposal awaiting
+   * accept/reject), and the resulting span is not empty.
+   *
+   * Always pins the block. A drag is the clearest possible statement of
+   * intent, and the same rule already applied to remote drags in Google
+   * Calendar applies here: once a person has placed something by hand, the
+   * scheduler stops moving it.
+   */
+  moveBlock: protectedProcedure
+    .input(
+      z
+        .object({
+          blockId: z.string().cuid(),
+          startsAt: z.coerce.date(),
+          endsAt: z.coerce.date(),
+        })
+        .refine((value) => value.endsAt > value.startsAt, {
+          message: 'A block cannot end before it starts.',
+        }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await prisma.scheduledBlock.updateMany({
+        where: {
+          id: input.blockId,
+          task: { userId: ctx.user.id },
+          // A proposal is still awaiting a yes/no on /today; dragging it here
+          // would let two different flows disagree about whether it exists.
+          state: 'ACCEPTED',
+        },
+        data: { startsAt: input.startsAt, endsAt: input.endsAt, isPinned: true },
+      });
+
+      if (result.count === 0) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'That block could not be moved — it may still be awaiting your OK.',
+        });
+      }
     }),
 
   /**
