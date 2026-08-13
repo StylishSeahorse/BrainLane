@@ -34,6 +34,7 @@ export const aiRouter = router({
         isCli: provider.protocol === 'cli',
         unverified: provider.unverified ?? false,
         signIn: provider.signIn ?? null,
+        cliModelOptions: provider.cliModelOptions ?? null,
       })),
       current: {
         providerId: definition.id,

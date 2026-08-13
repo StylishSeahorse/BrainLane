@@ -19,23 +19,11 @@ import {
   type SchedulableTask,
   type SchedulingInput,
 } from '@fluid/core';
-import { features } from '@fluid/env';
 import { prisma, type PlanChangeKind, type Prisma } from '@fluid/db';
-import {
-  DEFAULT_CONSENT,
-  RefMap,
-  applySuggestedOrder,
-  newAudit,
-  redactTask,
-  validateScheduleSuggestion,
-  withFallback,
-  type ConsentFlags,
-} from '@fluid/ai';
-import { getAiProvider } from './ai-provider';
+import { applyAiOrderingHint, consentFrom } from './ai-scheduler';
 
 /** How far ahead to plan. Two weeks is enough to show a deadline runway. */
 const HORIZON_DAYS = 14;
-const AI_TIMEOUT_MS = 20_000;
 
 export interface PlanResult {
   planVersionId: string;
@@ -149,56 +137,18 @@ export async function buildPlan(userId: string, trigger: string): Promise<PlanRe
   };
 
   // --- AI ordering hint, if allowed and available ---------------------------
-  const consent: ConsentFlags = user.aiSetting
-    ? {
-        shareTaskText: user.aiSetting.shareTaskText,
-        allowScheduling: user.aiSetting.allowScheduling,
-        allowTaskBreakdown: user.aiSetting.allowTaskBreakdown,
-        allowAvoidanceCheck: user.aiSetting.allowAvoidanceCheck,
-        allowChat: user.aiSetting.allowChat,
-      }
-    : DEFAULT_CONSENT;
-
-  const provider = features.ai && consent.allowScheduling ? await getAiProvider(userId) : null;
-
-  let orderedTasks = schedulable;
-  let usedAi = false;
-
-  if (provider && schedulable.length > 1) {
-    const refs = new RefMap();
-    const audit = newAudit();
-
-    const context = {
-      taskRefs: tasks.map((task) =>
-        redactTask(task, { consent, refs, now, audit }),
-      ) as never,
-      availableSlots: [],
-      workingHoursPerWeek: workingHours.length * 8,
-      timeZone: user.timeZone,
-    };
-
-    const outcome = await withFallback(
-      () => provider.generateScheduleSuggestion(context),
-      () => null,
-      {
-        timeoutMs: AI_TIMEOUT_MS,
-        // A failed AI call is a normal operating condition, not an incident.
-        onError: (error) => console.warn('[plan] AI unavailable, using deterministic order:', error),
-      },
-    );
-
-    if (outcome.usedAi && outcome.value) {
-      const validated = validateScheduleSuggestion(outcome.value, refs, schedulable);
-      if (validated.usable) {
-        // Only the ordering survives. Times come from the scheduler.
-        orderedTasks = applySuggestedOrder(schedulable, validated.orderedTaskIds);
-        usedAi = true;
-      }
-    }
-  }
+  const ordering = await applyAiOrderingHint({
+    userId,
+    now,
+    timeZone: user.timeZone,
+    workingHoursCount: workingHours.length,
+    tasks: schedulable,
+    rawTasks: tasks,
+    consent: consentFrom(user.aiSetting),
+  });
 
   // --- The deterministic engine decides, always -----------------------------
-  const result = runScheduler({ ...input, tasks: orderedTasks });
+  const result = runScheduler({ ...input, tasks: ordering.tasks });
 
   const changes = diffPlans(previous, result.blocks, {
     timeZone: user.timeZone,
@@ -219,7 +169,7 @@ export async function buildPlan(userId: string, trigger: string): Promise<PlanRe
       data: {
         userId,
         trigger,
-        usedAi,
+        usedAi: ordering.usedAi,
         status: 'PROPOSED',
         changes: {
           create: changes.map((change) => ({
@@ -260,7 +210,7 @@ export async function buildPlan(userId: string, trigger: string): Promise<PlanRe
   return {
     planVersionId: planVersion.id,
     summary: summarizeChanges(changes, trigger),
-    usedAi,
+    usedAi: ordering.usedAi,
     changes: changes
       .filter((change) => change.kind !== 'UNCHANGED')
       .map((change) => ({
