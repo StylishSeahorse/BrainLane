@@ -463,6 +463,11 @@ model Task {
   /// Set when the user has acknowledged an avoidance check-in, so we ask about
   /// this task once and then leave them alone.
   avoidanceAcknowledgedAt DateTime?
+  /// Set while a timer is running against this task; null otherwise. At most
+  /// one task per user may have this set — enforced in the service layer,
+  /// which stops any other running timer before starting a new one, rather
+  /// than by a database constraint that would need to reach across rows.
+  timerStartedAt DateTime? @db.Timestamptz(3)
 
   completedAt DateTime?
   createdAt   DateTime  @default(now())
@@ -683,6 +688,11 @@ model ProtectedTime {
 
   kind  ProtectedTimeKind @default(ROUTINE)
   label String?
+  /// Rows created from one multi-day pick (e.g. "weekdays") share this value,
+  /// so the settings UI can show and delete them as the one routine they are,
+  /// rather than as N unrelated rows — `dayOfWeek` only ever holds a single
+  /// day, so a five-day routine is genuinely five rows underneath.
+  groupId String?
 
   /// Recurring form.
   dayOfWeek Int?
@@ -698,6 +708,7 @@ model ProtectedTime {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([groupId])
   @@map("protected_times")
 }
 

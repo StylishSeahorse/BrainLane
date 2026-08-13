@@ -1,5 +1,17 @@
-import { breakdownTask, completeTask, deferTask, deleteTask } from '@/app/actions';
+import {
+  breakdownTask,
+  completeTask,
+  deferTask,
+  deleteTask,
+  uncompleteTask,
+  uncompleteTaskAction,
+} from '@/app/actions';
+import { LoggedActionButton } from '@/components/action-log';
+import { ConfirmButton } from '@/components/confirm-button';
+import { CheckIcon } from '@/components/icons';
 import { NewTaskForm } from '@/components/new-task-form';
+import { TaskEditor } from '@/components/task-editor';
+import { TaskTimer } from '@/components/task-timer';
 import { formatDuration, relativeDays } from '@/components/format';
 import {
   EmptyState,
@@ -16,7 +28,13 @@ export const dynamic = 'force-dynamic';
 export default async function ProjectsPage() {
   await requireUser();
   const caller = await getCaller();
-  const [tasks, projects] = await Promise.all([caller.task.list(), caller.project.list()]);
+  const [tasks, projects, recentlyDone] = await Promise.all([
+    caller.task.list(),
+    caller.project.list(),
+    caller.task.recentlyCompleted(),
+  ]);
+
+  const projectOptions = projects.map((project) => ({ id: project.id, name: project.name }));
 
   const remaining = tasks.reduce(
     (sum, task) => sum + Math.max(0, task.estimateMinutes - task.actualMinutes),
@@ -27,7 +45,7 @@ export default async function ProjectsPage() {
     <>
       <PageHeader
         eyebrow="Everything open"
-        title="Projects"
+        title="Tasks"
         subtitle={`${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${formatDuration(remaining)} of work left`}
       />
 
@@ -76,7 +94,7 @@ export default async function ProjectsPage() {
         </div>
       ) : null}
 
-      <NewTaskForm projects={projects.map((project) => ({ id: project.id, name: project.name }))} />
+      <NewTaskForm projects={projectOptions} />
 
       <SectionTitle>Open tasks</SectionTitle>
 
@@ -87,15 +105,24 @@ export default async function ProjectsPage() {
           {tasks.map((task) => (
             <li key={task.id} className="card bg-base-100 border-base-200 border shadow-sm">
               <div className="card-body flex-row gap-3 p-4 sm:p-5">
-                <form action={completeTask} className="pt-1">
-                  <input type="hidden" name="id" value={task.id} />
-                  <button
-                    type="submit"
+                {/*
+                  No confirmation on purpose — asking "did you really do that?"
+                  is friction at the one moment the app should feel rewarding.
+                  The trade is that it must be genuinely reversible, which the
+                  Undo on the log line and the "Finished recently" section
+                  below both provide.
+                */}
+                <div className="pt-1">
+                  <LoggedActionButton
+                    action={completeTask}
+                    fields={{ id: task.id }}
+                    successMessage={`Finished "${task.title}".`}
+                    undo={{ action: uncompleteTask, arg: task.id, label: 'Undo' }}
                     className="border-base-300 hover:border-primary hover:bg-primary/10 block size-5 rounded-full border-2 transition-colors"
-                    aria-label={`Mark "${task.title}" done`}
-                    title="Mark done"
-                  />
-                </form>
+                  >
+                    <span className="sr-only">Mark &ldquo;{task.title}&rdquo; done</span>
+                  </LoggedActionButton>
+                </div>
 
                 <div className="min-w-0 grow">
                   <h3 className="font-medium">{task.title}</h3>
@@ -149,28 +176,58 @@ export default async function ProjectsPage() {
                   ) : null}
 
                   <div className="mt-3 flex flex-wrap gap-2">
+                    <TaskTimer
+                      taskId={task.id}
+                      taskTitle={task.title}
+                      startedAt={task.timerStartedAt}
+                    />
                     {task.subtasks.length === 0 ? (
-                      <form action={breakdownTask}>
-                        <input type="hidden" name="id" value={task.id} />
-                        <input type="hidden" name="granularity" value="tiny" />
-                        <button type="submit" className="btn btn-outline btn-xs rounded-lg">
-                          Break it down
-                        </button>
-                      </form>
+                      <LoggedActionButton
+                        action={breakdownTask}
+                        fields={{ id: task.id, granularity: 'tiny' }}
+                        successMessage={`Broke "${task.title}" into smaller steps.`}
+                        pendingLabel="Thinking…"
+                        className="btn btn-outline btn-xs rounded-lg"
+                      >
+                        Break it down
+                      </LoggedActionButton>
                     ) : null}
-                    <form action={deferTask}>
-                      <input type="hidden" name="id" value={task.id} />
-                      <input type="hidden" name="days" value="1" />
-                      <button type="submit" className="btn btn-ghost btn-xs rounded-lg">
-                        Defer a day
-                      </button>
-                    </form>
-                    <form action={deleteTask}>
-                      <input type="hidden" name="id" value={task.id} />
-                      <button type="submit" className="btn btn-ghost btn-xs text-error rounded-lg">
-                        Delete
-                      </button>
-                    </form>
+
+                    <TaskEditor
+                      task={{
+                        id: task.id,
+                        title: task.title,
+                        notes: task.notes,
+                        projectId: task.projectId,
+                        priority: task.priority,
+                        energy: task.energy,
+                        estimateMinutes: task.estimateMinutes,
+                        deadline: task.deadline,
+                        isSplittable: task.isSplittable,
+                      }}
+                      projects={projectOptions}
+                    />
+
+                    <LoggedActionButton
+                      action={deferTask}
+                      fields={{ id: task.id, days: '1' }}
+                      successMessage={`Moved "${task.title}" to tomorrow.`}
+                      pendingLabel="Deferring…"
+                      className="btn btn-ghost btn-xs rounded-lg"
+                    >
+                      Defer a day
+                    </LoggedActionButton>
+
+                    {/* Delete is the one genuinely irreversible action here. */}
+                    <ConfirmButton
+                      action={deleteTask}
+                      fields={{ id: task.id }}
+                      label="Delete"
+                      confirmLabel="Really delete?"
+                      successMessage={`Deleted "${task.title}".`}
+                      className="btn btn-ghost btn-xs text-error rounded-lg"
+                      confirmClassName="btn btn-error btn-xs rounded-lg"
+                    />
                   </div>
                 </div>
               </div>
@@ -178,6 +235,46 @@ export default async function ProjectsPage() {
           ))}
         </ul>
       )}
+
+      {/*
+        The safety net for a mis-tap on the completion circle. Deliberately a
+        real section rather than only the Undo on the log line: the log entry
+        is gone after a reload, and "I ticked the wrong thing yesterday" needs
+        an answer that outlives the session.
+      */}
+      {recentlyDone.length > 0 ? (
+        <>
+          <SectionTitle>Finished recently</SectionTitle>
+          <ul className="card bg-base-100 border-base-200 divide-base-200 divide-y border shadow-sm">
+            {recentlyDone.map((task) => (
+              <li key={task.id} className="flex items-center gap-3 px-5 py-3">
+                <span className="text-success shrink-0" aria-hidden="true">
+                  <CheckIcon />
+                </span>
+                <div className="min-w-0 grow">
+                  <div className="text-base-content/70 truncate text-sm line-through">
+                    {task.title}
+                  </div>
+                  {task.actualMinutes > 0 ? (
+                    <div className="text-base-content/40 text-xs">
+                      {formatDuration(task.actualMinutes)} tracked
+                    </div>
+                  ) : null}
+                </div>
+                <LoggedActionButton
+                  action={uncompleteTaskAction}
+                  fields={{ id: task.id }}
+                  successMessage={`Brought "${task.title}" back.`}
+                  pendingLabel="Restoring…"
+                  className="btn btn-ghost btn-xs shrink-0 rounded-lg"
+                >
+                  Bring it back
+                </LoggedActionButton>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
     </>
   );
 }

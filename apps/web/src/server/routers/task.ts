@@ -1,7 +1,7 @@
 import 'server-only';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { prisma } from '@fluid/db';
+import { prisma, type Db, type Task } from '@fluid/db';
 import { features } from '@fluid/env';
 import { withFallback } from '@fluid/ai';
 import { protectedProcedure, router } from '../trpc';
@@ -130,6 +130,66 @@ export const taskRouter = router({
         });
       });
     }),
+
+  /**
+   * Put a finished task back.
+   *
+   * Completion is one tap with no confirmation, which is right — asking "are
+   * you sure you did that?" is friction in exactly the wrong place. The
+   * bargain is that it has to be genuinely reversible, and reversible means
+   * undoing the side effects too, not just flipping the status back.
+   */
+  uncomplete: protectedProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const now = new Date();
+
+      return prisma.$transaction(async (tx) => {
+        const task = await tx.task.findFirst({
+          where: { id: input.id, userId: ctx.user.id, status: 'DONE' },
+        });
+        if (!task) throw new TRPCError({ code: 'NOT_FOUND' });
+
+        await tx.task.update({
+          where: { id: task.id },
+          data: { status: 'READY', completedAt: null, lastTouchedAt: now },
+        });
+
+        // Drop the sample completing it produced. Leaving it would teach the
+        // estimation coach from an event the user just said did not happen.
+        const sample = await tx.timeEstimateSample.findFirst({
+          where: { taskId: task.id, userId: ctx.user.id },
+          orderBy: { recordedAt: 'desc' },
+        });
+        if (sample) await tx.timeEstimateSample.delete({ where: { id: sample.id } });
+
+        // Only sessions still ahead of us go back to ACCEPTED. A block whose
+        // time has already passed was genuinely sat through, and marking it
+        // upcoming again would put a session in the past on the calendar.
+        await tx.scheduledBlock.updateMany({
+          where: { taskId: task.id, state: 'COMPLETED', endsAt: { gt: now } },
+          data: { state: 'ACCEPTED' },
+        });
+      });
+    }),
+
+  /** Finished in the last day, so the Tasks page can offer them back. */
+  recentlyCompleted: protectedProcedure.query(async ({ ctx }) => {
+    const since = new Date();
+    since.setDate(since.getDate() - 1);
+
+    return prisma.task.findMany({
+      where: {
+        userId: ctx.user.id,
+        parentId: null,
+        status: 'DONE',
+        completedAt: { gte: since },
+      },
+      select: { id: true, title: true, completedAt: true, actualMinutes: true },
+      orderBy: { completedAt: 'desc' },
+      take: 5,
+    });
+  }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string().cuid() }))
@@ -292,7 +352,77 @@ export const taskRouter = router({
         data: { actualMinutes: { increment: input.minutes }, lastTouchedAt: new Date() },
       });
     }),
+
+  /**
+   * Start a timer against this task.
+   *
+   * At most one task per user may be running at once — a person cannot
+   * actually be doing two things simultaneously, so starting a second timer
+   * implicitly means the first one just ended. Rather than reject that, this
+   * stops and credits the other task's real elapsed time first, so switching
+   * tasks stays a one-tap action instead of "stop, then start".
+   */
+  startTimer: protectedProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const now = new Date();
+
+      return prisma.$transaction(async (tx) => {
+        const task = await tx.task.findFirst({ where: { id: input.id, userId: ctx.user.id } });
+        if (!task) throw new TRPCError({ code: 'NOT_FOUND' });
+
+        const other = await tx.task.findFirst({
+          where: { userId: ctx.user.id, id: { not: task.id }, timerStartedAt: { not: null } },
+        });
+        if (other) await creditElapsed(tx, other, now);
+
+        await tx.task.update({
+          where: { id: task.id },
+          data: { timerStartedAt: now, lastTouchedAt: now },
+        });
+
+        return { startedAt: now, switchedFrom: other?.title ?? null };
+      });
+    }),
+
+  /** Stop the timer and credit the real elapsed time — never a flat guess. */
+  stopTimer: protectedProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const now = new Date();
+
+      return prisma.$transaction(async (tx) => {
+        const task = await tx.task.findFirst({ where: { id: input.id, userId: ctx.user.id } });
+        if (!task) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (!task.timerStartedAt) return { minutes: 0 };
+
+        const minutes = await creditElapsed(tx, task, now);
+        return { minutes };
+      });
+    }),
 });
+
+/**
+ * Stop whatever timer a task has running and credit its real elapsed
+ * duration. Shared by `startTimer` (stopping whichever other task was
+ * running) and `stopTimer` (stopping this one) so the crediting logic exists
+ * exactly once.
+ */
+async function creditElapsed(tx: Db, task: Task, now: Date): Promise<number> {
+  const startedAt = task.timerStartedAt;
+  if (!startedAt) return 0;
+
+  // Rounds up to a minute rather than down to zero — a 40-second dash to
+  // start something should still count as having happened.
+  const minutes = Math.max(1, Math.round((now.getTime() - startedAt.getTime()) / 60_000));
+
+  await tx.task.update({
+    where: { id: task.id },
+    data: { timerStartedAt: null, actualMinutes: { increment: minutes }, lastTouchedAt: now },
+  });
+
+  return minutes;
+}
 
 /** Local copy of the categoriser, kept off the AI path so it always runs. */
 function categoryFor(title: string): string {

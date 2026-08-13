@@ -122,6 +122,39 @@ export const DotsIcon = ({ className }: IconProps) => (
   </svg>
 );
 
+export const CheckIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M5 12.5l4.5 4.5L19 7" />
+  </svg>
+);
+
+export const XIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
+
+export const TimerIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <circle cx="12" cy="13" r="8" />
+    <path d="M12 9v4l3 2M9.5 2.5h5M12 2.5V5" />
+  </svg>
+);
+
+export const PencilIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={className ?? 'size-3.5'}>
+    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z" />
+  </svg>
+);
+
+/** Routines: a repeating cycle. */
+export const RoutineIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 12a8 8 0 0 1-13.7 5.6L4 16" />
+    <path d="M20 4v4h-4M4 20v-4h4" />
+  </svg>
+);
+
 /** Logo mark: a node with branches — planning, not a brain cliché. */
 export const LogoMark = ({ className }: IconProps) => (
   <svg {...stroke} strokeWidth={1.6} className={className ?? 'size-5'}>

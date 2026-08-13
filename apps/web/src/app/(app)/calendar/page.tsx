@@ -1,5 +1,6 @@
-import { localDayOfWeek, startOfLocalDay, toLocal } from '@fluid/core';
+import { expandLabeledRoutines, localDayOfWeek, startOfLocalDay, toLocal } from '@fluid/core';
 import { rebuildPlan } from '@/app/actions';
+import { LoggedActionButton } from '@/components/action-log';
 import { formatTime } from '@/components/format';
 import {
   Banner,
@@ -8,6 +9,7 @@ import {
   SegmentedNav,
 } from '@/components/page-header';
 import { ColumnsIcon, ListIcon, RefreshIcon, WandIcon } from '@/components/icons';
+import { WeekGrid } from '@/components/week-grid';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
 
@@ -71,6 +73,30 @@ export default async function CalendarPage({
   const { blocks, events } = await caller.plan.blocks({ from: weekStart, to: weekEnd });
   const autonomy = await caller.agent.autonomy();
   const { connections } = await caller.calendar.connections();
+  const routines = await caller.routine.list();
+
+  // Turned into concrete instants for just this week here, at the edge —
+  // `ProtectedTimeRule` and `expandLabeledRoutines` are the scheduler's own
+  // vocabulary, reused rather than re-implemented so "what routines exist"
+  // can never quietly drift from "what the scheduler actually protects".
+  const routineBlocks = expandLabeledRoutines(
+    // One rule per day in the group — `days: null` means every day and
+    // becomes a single `dayOfWeek: null` rule; "weekdays" becomes five,
+    // mirroring the five rows actually stored for it. Collapsing a multi-day
+    // group to one rule would have no way to express "these five days, not
+    // all seven".
+    routines.flatMap((routine) =>
+      (routine.days ?? [null]).map((dayOfWeek) => ({
+        kind: 'ROUTINE' as const,
+        label: routine.label,
+        dayOfWeek,
+        startTime: routine.startTime,
+        endTime: routine.endTime,
+      })),
+    ),
+    { start: weekStart, end: weekEnd },
+    timeZone,
+  );
 
   const linked = connections.filter((connection) => connection.status !== 'DISCONNECTED');
   const halted = linked.find((connection) => connection.status === 'NEEDS_ATTENTION');
@@ -84,25 +110,16 @@ export default async function CalendarPage({
     if (index < 5) return true;
     return (
       blocks.some((block) => isSameLocalDay(block.startsAt, day, timeZone)) ||
-      events.some((event) => isSameLocalDay(event.startsAt, day, timeZone))
+      events.some((event) => isSameLocalDay(event.startsAt, day, timeZone)) ||
+      routineBlocks.some((routine) => isSameLocalDay(routine.start, day, timeZone))
     );
   });
 
-  const [startHour, endHour] = visibleHours([...blocks, ...events], timeZone);
-  const totalHours = endHour - startHour;
-
-  const offsetPercent = (date: Date): number => {
-    const local = toLocal(date, timeZone);
-    const minutes = local.hour * 60 + local.minute - startHour * 60;
-    return Math.max(0, Math.min(100, (minutes / (totalHours * 60)) * 100));
-  };
-
-  const hourLabels = Array.from({ length: totalHours + 1 }, (_, index) => startHour + index).filter(
-    (hour) => (hour - startHour) % 2 === 0,
+  const [startHour, endHour] = visibleHours(
+    [...blocks, ...events, ...routineBlocks.map((routine) => ({ startsAt: routine.start, endsAt: routine.end }))],
+    timeZone,
   );
-
-  const formatHour = (hour: number) =>
-    `${((hour + 11) % 12) + 1} ${hour < 12 || hour === 24 ? 'AM' : 'PM'}`;
+  const totalHours = endHour - startHour;
 
   return (
     <>
@@ -118,12 +135,16 @@ export default async function CalendarPage({
                 { value: 'agenda', label: 'Agenda', href: '/calendar?view=agenda', icon: <ListIcon /> },
               ]}
             />
-            <form action={rebuildPlan}>
-              <button type="submit" className="btn btn-primary gap-2 rounded-xl">
-                <WandIcon />
-                Plan my week
-              </button>
-            </form>
+            <LoggedActionButton
+              action={rebuildPlan}
+              fields={{}}
+              successMessage="Re-planned your week."
+              pendingLabel="Planning…"
+              className="btn btn-primary gap-2 rounded-xl"
+            >
+              <WandIcon />
+              Plan my week
+            </LoggedActionButton>
           </>
         }
       />
@@ -157,138 +178,29 @@ export default async function CalendarPage({
           : ' The AI may rearrange this whole week.'}
       </Banner>
 
-      {blocks.length === 0 && events.length === 0 ? (
+      {blocks.length === 0 && events.length === 0 && routineBlocks.length === 0 ? (
         <EmptyState
           title="Nothing scheduled this week yet."
           hint="Add a few tasks, then press “Plan my week”."
         />
       ) : view === 'week' ? (
-        <>
-          {/* The grid is desktop-only: on a phone these become unreadable slivers. */}
-          <div className="card bg-base-100 border-base-200 hidden overflow-hidden border shadow-sm lg:block">
-            <div
-              className="grid"
-              style={{ gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))` }}
-            >
-              <div className="border-base-200 border-b" />
-              {days.map((day) => {
-                const local = toLocal(day, timeZone);
-                const isToday = isSameLocalDay(day, now, timeZone);
-                return (
-                  <div
-                    key={day.toISOString()}
-                    className="border-base-200 border-b border-l py-4 text-center"
-                  >
-                    <div
-                      className={`text-[0.65rem] font-semibold uppercase tracking-[0.12em] ${
-                        isToday ? 'text-primary' : 'text-base-content/40'
-                      }`}
-                    >
-                      {new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone }).format(day)}
-                    </div>
-                    <div
-                      className={`mt-1 text-2xl font-bold tracking-tight ${
-                        isToday ? 'text-primary' : ''
-                      }`}
-                    >
-                      {local.day}
-                    </div>
-                  </div>
-                );
-              })}
-
-              <div className="relative" style={{ height: `${totalHours * 4}rem` }}>
-                {hourLabels.map((hour) => (
-                  <span
-                    key={hour}
-                    className="text-base-content/35 absolute right-2.5 -translate-y-1/2 text-[0.65rem] font-medium"
-                    style={{ top: `${((hour - startHour) / totalHours) * 100}%` }}
-                  >
-                    {formatHour(hour)}
-                  </span>
-                ))}
-              </div>
-
-              {days.map((day) => {
-                const dayBlocks = blocks.filter((block) =>
-                  isSameLocalDay(block.startsAt, day, timeZone),
-                );
-                const dayEvents = events.filter((event) =>
-                  isSameLocalDay(event.startsAt, day, timeZone),
-                );
-
-                return (
-                  <div
-                    key={day.toISOString()}
-                    className="cal-col border-base-200 border-l"
-                    style={{ height: `${totalHours * 4}rem` }}
-                  >
-                    {Array.from({ length: totalHours + 1 }, (_, index) => (
-                      <div
-                        key={index}
-                        className="cal-line"
-                        style={{ top: `${(index / totalHours) * 100}%` }}
-                      />
-                    ))}
-
-                    {dayEvents.map((event) => {
-                      const top = offsetPercent(event.startsAt);
-                      const height = Math.max(3, offsetPercent(event.endsAt) - top);
-                      return (
-                        <div
-                          key={event.id}
-                          className="cal-evt cal-evt-external"
-                          style={{ top: `${top}%`, height: `${height}%` }}
-                          title={`${event.title} · ${formatTime(event.startsAt, timeZone)}`}
-                        >
-                          <div className="text-base-content/50 text-[0.62rem]">
-                            {formatTime(event.startsAt, timeZone)}
-                          </div>
-                          <div className="text-base-content/80 truncate font-semibold">
-                            {event.title}
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {dayBlocks.map((block) => {
-                      const top = offsetPercent(block.startsAt);
-                      const height = Math.max(3, offsetPercent(block.endsAt) - top);
-                      const proposed = block.state === 'PROPOSED';
-                      return (
-                        <div
-                          key={block.id}
-                          className={`cal-evt ${proposed ? 'cal-evt-proposed' : ''}`}
-                          style={{ top: `${top}%`, height: `${height}%` }}
-                          title={`${block.task.title} · ${formatTime(block.startsAt, timeZone)}–${formatTime(block.endsAt, timeZone)}`}
-                        >
-                          <div className="text-primary/70 text-[0.62rem]">
-                            {formatTime(block.startsAt, timeZone)}
-                          </div>
-                          <div className="line-clamp-2 font-semibold">{block.task.title}</div>
-                          <div className="text-base-content/40 mt-0.5 text-[0.6rem]">
-                            {proposed ? 'Awaiting your OK' : 'AI task block'}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Phones get the agenda instead — same data, not a degraded grid. */}
-          <div className="lg:hidden">
-            <Agenda
-              days={allDays}
-              blocks={blocks}
-              timeZone={timeZone}
-              now={now}
-              isSameLocalDay={isSameLocalDay}
-            />
-          </div>
-        </>
+        /*
+          One view per choice, at every width. Previously the grid was
+          desktop-only with the agenda rendered underneath it, so on a phone
+          both toggle positions showed the agenda and the control looked
+          broken. The grid now scrolls sideways on narrow screens instead —
+          columns keep a readable width and you pan across the week, which is
+          what every calendar app does on a phone.
+        */
+        <WeekGrid
+          days={days}
+          blocks={blocks}
+          events={events}
+          routines={routineBlocks}
+          timeZone={timeZone}
+          startHour={startHour}
+          totalHours={totalHours}
+        />
       ) : (
         <Agenda
           days={allDays}
@@ -298,6 +210,7 @@ export default async function CalendarPage({
           isSameLocalDay={isSameLocalDay}
         />
       )}
+
     </>
   );
 }
@@ -305,9 +218,10 @@ export default async function CalendarPage({
 /**
  * Day-grouped list.
  *
- * Not a fallback — it is the accessible equivalent of the grid, and the only
- * sensible layout on a phone. Absolutely-positioned columns are close to
- * unusable with a screen reader.
+ * Not a fallback — it is the accessible equivalent of the grid, and the
+ * better layout on a small screen. Absolutely-positioned columns are close to
+ * unusable with a screen reader, so this stays a first-class choice rather
+ * than something you are forced into by width.
  */
 function Agenda({
   days,

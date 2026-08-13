@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { prisma } from '@fluid/db';
 import { signOut } from '@/app/actions';
 import { requireUser } from '@/server/auth/session';
+import { ActionLogPanel } from '@/components/action-log';
 import { DockLink, SidebarLink, type NavItem } from '@/components/nav';
 import {
   ActivityIcon,
@@ -10,9 +11,10 @@ import {
   LeafIcon,
   LogoMark,
   MenuIcon,
-  ProjectsIcon,
   ReviewIcon,
+  RoutineIcon,
   SettingsIcon,
+  TasksIcon,
   TodayIcon,
 } from '@/components/icons';
 
@@ -43,7 +45,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const nav: NavItem[] = [
     { href: '/today', label: 'Today', icon: <TodayIcon />, ...(todayBadge ? { badge: todayBadge } : {}) },
     { href: '/calendar', label: 'Calendar', icon: <CalendarIcon /> },
-    { href: '/projects', label: 'Projects', icon: <ProjectsIcon /> },
+    // The route stays /projects — /tasks already redirects here, and this is
+    // only a label change, not a URL one.
+    { href: '/projects', label: 'Tasks', icon: <TasksIcon /> },
+    { href: '/routines', label: 'Routines', icon: <RoutineIcon /> },
     { href: '/activity', label: 'Activity', icon: <ActivityIcon /> },
     { href: '/review', label: 'Review', icon: <ReviewIcon /> },
     { href: '/settings', label: 'Settings', icon: <SettingsIcon /> },
@@ -89,6 +94,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           ))}
         </nav>
       </div>
+
+      {/*
+        A visible record of what an action just did. Most mutations here are a
+        form post that changes nothing visible on screen — logging five
+        minutes against a task, for instance — which reads as "broken" to
+        someone who cannot otherwise tell whether their tap registered.
+      */}
+      <ActionLogPanel />
 
       <div className="drawer-side z-40">
         <label htmlFor="app-drawer" aria-label="Close menu" className="drawer-overlay" />
