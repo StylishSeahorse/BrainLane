@@ -7,6 +7,10 @@ import {
   uncompleteTaskAction,
 } from '@/app/actions';
 import { LoggedActionButton } from '@/components/action-log';
+import { Braindump } from '@/components/braindump';
+import { AreaPicker } from '@/components/area-picker';
+import { BucketPicker } from '@/components/bucket-picker';
+import { BUCKET_LABELS, BUCKET_ORDER, type Bucket } from '@/components/buckets';
 import { ConfirmButton } from '@/components/confirm-button';
 import { CheckIcon } from '@/components/icons';
 import { NewTaskForm } from '@/components/new-task-form';
@@ -25,13 +29,23 @@ import { requireUser } from '@/server/auth/session';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Unbucketed work reads as "Soon" rather than sitting in a sixth unsorted
+ * pile. An inbox you have to process before the list is usable is what kills
+ * backlogs; a default that is occasionally wrong costs one click to fix.
+ */
+function bucketOf(task: { timeBucket: string | null }): Bucket {
+  return (task.timeBucket as Bucket | null) ?? 'SOON';
+}
+
 export default async function ProjectsPage() {
   await requireUser();
   const caller = await getCaller();
-  const [tasks, projects, recentlyDone] = await Promise.all([
+  const [tasks, projects, recentlyDone, areas] = await Promise.all([
     caller.task.list(),
     caller.project.list(),
     caller.task.recentlyCompleted(),
+    caller.area.list(),
   ]);
 
   const projectOptions = projects.map((project) => ({ id: project.id, name: project.name }));
@@ -39,6 +53,13 @@ export default async function ProjectsPage() {
   const remaining = tasks.reduce(
     (sum, task) => sum + Math.max(0, task.estimateMinutes - task.actualMinutes),
     0,
+  );
+
+  // Grouped by horizon rather than shown as one undifferentiated column. A
+  // flat list of everything ever captured is the thing people stop opening;
+  // "Soon" being short is what makes the rest bearable to keep.
+  const ordered = [...tasks].sort(
+    (a, b) => BUCKET_ORDER.indexOf(bucketOf(a)) - BUCKET_ORDER.indexOf(bucketOf(b)),
   );
 
   return (
@@ -94,7 +115,10 @@ export default async function ProjectsPage() {
         </div>
       ) : null}
 
-      <NewTaskForm projects={projectOptions} />
+      <div className="grid gap-3 lg:grid-cols-2">
+        <NewTaskForm projects={projectOptions} />
+        <Braindump />
+      </div>
 
       <SectionTitle>Open tasks</SectionTitle>
 
@@ -102,8 +126,19 @@ export default async function ProjectsPage() {
         <EmptyState title="Nothing here yet." hint="Add the thing that has been nagging at you." />
       ) : (
         <ul className="space-y-3">
-          {tasks.map((task) => (
+          {ordered.map((task, index) => (
             <li key={task.id} className="card bg-base-100 border-base-200 border shadow-sm">
+              {/*
+                A heading before the first task of each horizon. Rendered inside
+                the row rather than by splitting the list into five lists,
+                because the card markup is substantial and duplicating it per
+                group is how the two copies drift apart.
+              */}
+              {index === 0 || bucketOf(ordered[index - 1]!) !== bucketOf(task) ? (
+                <h3 className="text-base-content/40 border-base-200 border-b px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.14em] sm:px-5">
+                  {BUCKET_LABELS[bucketOf(task)]}
+                </h3>
+              ) : null}
               <div className="card-body flex-row gap-3 p-4 sm:p-5">
                 {/*
                   No confirmation on purpose — asking "did you really do that?"
@@ -175,12 +210,14 @@ export default async function ProjectsPage() {
                     </ul>
                   ) : null}
 
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
                     <TaskTimer
                       taskId={task.id}
                       taskTitle={task.title}
                       startedAt={task.timerStartedAt}
                     />
+                    <BucketPicker taskId={task.id} current={bucketOf(task)} />
+                    <AreaPicker taskId={task.id} current={task.areaId} areas={areas} />
                     {task.subtasks.length === 0 ? (
                       <LoggedActionButton
                         action={breakdownTask}

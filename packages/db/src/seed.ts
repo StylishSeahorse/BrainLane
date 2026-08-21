@@ -57,18 +57,36 @@ async function main(): Promise<void> {
     },
   });
 
+  // Two contexts, one of which does not compete for the working day. The
+  // dentist appointment below is the case worth seeding: it consumes real time
+  // and is deliberately not counted as work delivered.
+  const work = await prisma.area.create({
+    data: { userId: user.id, name: 'Work', color: '#6366f1', position: 0 },
+  });
+
+  const personal = await prisma.area.create({
+    data: {
+      userId: user.id,
+      name: 'Personal',
+      color: '#10b981',
+      countsTowardCapacity: false,
+      position: 1,
+    },
+  });
+
   const project = await prisma.project.create({
     data: {
       userId: user.id,
       name: 'Quarterly report',
       description: 'The thing that keeps not happening.',
       color: '#c2410c',
+      areaId: work.id,
       deadline: at(4, 17),
     },
   });
 
   const sideProject = await prisma.project.create({
-    data: { userId: user.id, name: 'Admin', color: '#0369a1' },
+    data: { userId: user.id, name: 'Admin', color: '#0369a1', areaId: work.id },
   });
 
   await prisma.task.createMany({
@@ -76,6 +94,7 @@ async function main(): Promise<void> {
       {
         userId: user.id,
         projectId: project.id,
+        areaId: work.id,
         title: 'Write the quarterly report',
         notes: 'Needs the Q3 numbers, a summary, and the forecast section.',
         status: 'READY',
@@ -92,6 +111,7 @@ async function main(): Promise<void> {
       {
         userId: user.id,
         projectId: project.id,
+        areaId: work.id,
         title: 'Pull Q3 numbers from the dashboard',
         status: 'READY',
         priority: 'HIGH',
@@ -102,6 +122,7 @@ async function main(): Promise<void> {
       {
         userId: user.id,
         projectId: sideProject.id,
+        areaId: work.id,
         title: 'Reply to Dana about the invoice',
         status: 'READY',
         priority: 'URGENT',
@@ -113,6 +134,7 @@ async function main(): Promise<void> {
       {
         userId: user.id,
         projectId: sideProject.id,
+        areaId: personal.id,
         title: 'Book the dentist',
         status: 'READY',
         priority: 'MEDIUM',
@@ -125,6 +147,7 @@ async function main(): Promise<void> {
       {
         userId: user.id,
         projectId: project.id,
+        areaId: work.id,
         title: 'Rehearse the presentation',
         status: 'BACKLOG',
         priority: 'MEDIUM',

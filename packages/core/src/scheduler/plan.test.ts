@@ -533,3 +533,177 @@ describe('daylight saving', () => {
     expect(hhmm(after.blocks[0]!.start)).toBe('08:00'); // BST == UTC+1
   });
 });
+
+// ---------------------------------------------------------------------------
+// Day commitments
+//
+// The Sunsama half of the model: a task placed on a day is a promise, and the
+// scheduler honours it ahead of its own preferences. The tests that matter are
+// the ones about what happens when the promise cannot be kept — the day is
+// full, or already over — because that is where a planner either stays honest
+// or starts quietly lying to the user.
+// ---------------------------------------------------------------------------
+describe('plan — day commitments', () => {
+  /** Half-open local-day interval, `offset` days after the Monday under test. */
+  const day = (offset: number) => ({
+    start: new Date(Date.UTC(2026, 5, 15 + offset, 0, 0, 0)),
+    end: new Date(Date.UTC(2026, 5, 16 + offset, 0, 0, 0)),
+  });
+
+  it('places committed work inside the day it was promised to', () => {
+    const result = plan(
+      makeInput({
+        tasks: [makeTask({ id: 'thursday', remainingMinutes: 60, committedTo: day(3) })],
+      }),
+    );
+
+    const [block] = blocksFor(result.blocks, 'thursday');
+    expect(block).toBeDefined();
+    expect(dayAndTime(block!.start)).toBe('06-18 09:00');
+    expect(result.spilled).toEqual([]);
+  });
+
+  it('lets a commitment outrank priority', () => {
+    // The urgent task would otherwise take the 09:00 slot. The committed one
+    // wins because the user decided it, and deciding is the whole product.
+    const result = plan(
+      makeInput({
+        tasks: [
+          makeTask({ id: 'urgent', priority: 'URGENT', remainingMinutes: 60 }),
+          makeTask({ id: 'promised', priority: 'LOW', remainingMinutes: 60, committedTo: day(0) }),
+        ],
+      }),
+    );
+
+    expect(hhmm(blocksFor(result.blocks, 'promised')[0]!.start)).toBe('09:00');
+    expect(hhmm(blocksFor(result.blocks, 'urgent')[0]!.start)).toBe('10:00');
+  });
+
+  it('does not let a distant commitment squat on today', () => {
+    // Committed to Friday, so it may not take Monday's slots even though it is
+    // ordered first.
+    const result = plan(
+      makeInput({
+        tasks: [
+          makeTask({ id: 'friday', remainingMinutes: 60, committedTo: day(4) }),
+          makeTask({ id: 'whenever', remainingMinutes: 60 }),
+        ],
+      }),
+    );
+
+    expect(dayAndTime(blocksFor(result.blocks, 'friday')[0]!.start)).toBe('06-19 09:00');
+    expect(dayAndTime(blocksFor(result.blocks, 'whenever')[0]!.start)).toBe('06-15 09:00');
+  });
+
+  it('still schedules work that does not fit its day, and says where it went', () => {
+    // Eight hours of working time, nine hours promised into it.
+    const result = plan(
+      makeInput({
+        tasks: [
+          makeTask({ id: 'filler', remainingMinutes: 480, committedTo: day(0), maxChunkMinutes: 480 }),
+          makeTask({ id: 'overflow', remainingMinutes: 60, committedTo: day(0) }),
+        ],
+      }),
+    );
+
+    const overflow = blocksFor(result.blocks, 'overflow');
+    expect(overflow).toHaveLength(1);
+    // Placed, but on Tuesday rather than the Monday it was promised to.
+    expect(dayAndTime(overflow[0]!.start)).toBe('06-16 09:00');
+
+    const spill = result.spilled.find((entry) => entry.taskId === 'overflow');
+    expect(spill?.spilledMinutes).toBe(60);
+    // The copy has to be plain language, not a constraint dump.
+    expect(spill?.explanation).toMatch(/nothing was dropped/i);
+  });
+
+  it('reports work that fits nowhere as unscheduled, not as spilled', () => {
+    // A commitment to a day with no working hours in the horizon at all.
+    const result = plan(
+      makeInput({
+        workingHours: [],
+        tasks: [makeTask({ id: 'homeless', remainingMinutes: 60, committedTo: day(0) })],
+      }),
+    );
+
+    expect(result.blocks).toEqual([]);
+    expect(result.spilled).toEqual([]);
+    expect(result.unscheduled.map((entry) => entry.taskId)).toEqual(['homeless']);
+  });
+
+  it('rolls a commitment to a day that has already passed into the next opening', () => {
+    // Yesterday's unfinished promise. The day is gone; the work is not.
+    const result = plan(
+      makeInput({
+        tasks: [makeTask({ id: 'yesterday', remainingMinutes: 60, committedTo: day(-1) })],
+      }),
+    );
+
+    const [block] = blocksFor(result.blocks, 'yesterday');
+    expect(dayAndTime(block!.start)).toBe('06-15 09:00');
+    expect(result.spilled.map((entry) => entry.taskId)).toEqual(['yesterday']);
+  });
+
+  it('releases a retained block when the task is committed to another day', () => {
+    // The stability pass would otherwise keep the Monday block exactly where
+    // the user just dragged it away from.
+    const previous: PlannedBlock[] = [
+      {
+        taskId: 'moved',
+        start: new Date('2026-06-15T09:00:00Z'),
+        end: new Date('2026-06-15T10:00:00Z'),
+        isPinned: false,
+        chunkIndex: 1,
+        chunkCount: 1,
+      },
+    ];
+
+    const result = plan(
+      makeInput({
+        previous,
+        tasks: [makeTask({ id: 'moved', remainingMinutes: 60, committedTo: day(2) })],
+      }),
+    );
+
+    expect(dayAndTime(blocksFor(result.blocks, 'moved')[0]!.start)).toBe('06-17 09:00');
+  });
+
+  it('keeps a retained block that is already inside the committed day', () => {
+    // The mirror of the test above: committing to the day a block is already
+    // on must not cause churn.
+    const previous: PlannedBlock[] = [
+      {
+        taskId: 'settled',
+        start: new Date('2026-06-15T14:00:00Z'),
+        end: new Date('2026-06-15T15:00:00Z'),
+        isPinned: false,
+        chunkIndex: 1,
+        chunkCount: 1,
+      },
+    ];
+
+    const result = plan(
+      makeInput({
+        previous,
+        tasks: [makeTask({ id: 'settled', remainingMinutes: 60, committedTo: day(0) })],
+      }),
+    );
+
+    expect(hhmm(blocksFor(result.blocks, 'settled')[0]!.start)).toBe('14:00');
+  });
+
+  it('never lets a commitment override protected time', () => {
+    const result = plan(
+      makeInput({
+        protectedTimes: [
+          { kind: 'ROUTINE', dayOfWeek: 1, startTime: '09:00', endTime: '17:00' },
+        ],
+        tasks: [makeTask({ id: 'promised', remainingMinutes: 60, committedTo: day(0) })],
+      }),
+    );
+
+    // Monday is entirely protected, so the work goes to Tuesday rather than
+    // eating into it. Commitment is a preference; protected time is not.
+    expect(dayAndTime(blocksFor(result.blocks, 'promised')[0]!.start)).toBe('06-16 09:00');
+  });
+});

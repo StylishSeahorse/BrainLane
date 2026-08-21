@@ -1,5 +1,7 @@
 import { prisma } from '@fluid/db';
 import { formatDuration } from '@/components/format';
+import { AiActivity } from '@/components/ai-activity';
+import { Objectives } from '@/components/objectives';
 import { PageHeader, SectionTitle } from '@/components/page-header';
 import { getCaller } from '@/server/caller';
 import { requireUser } from '@/server/auth/session';
@@ -21,26 +23,52 @@ export default async function ReviewPage() {
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
 
-  const [accuracy, completed, moved, workingMinutes] = await Promise.all([
-    caller.plan.estimateAccuracy(),
-    prisma.task.count({
-      where: { userId: user.id, status: 'DONE', completedAt: { gte: weekAgo } },
-    }),
-    prisma.task.count({
-      where: {
-        userId: user.id,
-        rescheduleCount: { gte: 1 },
-        lastTouchedAt: { gte: weekAgo },
-        status: { notIn: ['DONE', 'CANCELLED'] },
-      },
-    }),
-    weeklyWorkingMinutes(user.id),
-  ]);
+  const [
+    accuracy,
+    completed,
+    moved,
+    workingMinutes,
+    objectives,
+    lastWeekObjectives,
+    byArea,
+    aiActions,
+    autonomy,
+  ] = await Promise.all([
+      caller.plan.estimateAccuracy(),
+      prisma.task.count({
+        where: { userId: user.id, status: 'DONE', completedAt: { gte: weekAgo } },
+      }),
+      prisma.task.count({
+        where: {
+          userId: user.id,
+          rescheduleCount: { gte: 1 },
+          lastTouchedAt: { gte: weekAgo },
+          status: { notIn: ['DONE', 'CANCELLED'] },
+        },
+      }),
+      weeklyWorkingMinutes(user.id),
+      caller.objective.list({}),
+      caller.objective.list({ week: weekAgo }),
+      caller.area.timeSpent({ days: 7 }),
+      caller.agent.activity({ limit: 30 }),
+      caller.agent.autonomy(),
+    ]);
+
+  const trackedMinutes = byArea.reduce((sum, entry) => sum + entry.minutes, 0);
 
   return (
     <>
       <PageHeader eyebrow="Last seven days"
         title="Review" subtitle="The last seven days, as patterns rather than a score." />
+
+      {/*
+        Objectives come first: the week's intent is the frame the numbers below
+        should be read through, not a footnote after them.
+      */}
+      <SectionTitle>What this week is for</SectionTitle>
+      <Objectives objectives={objectives} lastWeek={lastWeekObjectives} />
+
+      <SectionTitle>How the week went</SectionTitle>
 
       <div className="stats stats-vertical bg-base-100 border-base-200 w-full border shadow-sm sm:stats-horizontal">
         <div className="stat">
@@ -59,6 +87,63 @@ export default async function ReviewPage() {
           <div className="stat-desc">before meetings and breaks</div>
         </div>
       </div>
+
+      {/*
+        --- Where the time went -------------------------------------------
+        Only shown once there is something to show. An empty breakdown with a
+        row reading "0h" teaches people the section is broken rather than that
+        they have not tracked anything.
+      */}
+      {trackedMinutes > 0 ? (
+        <>
+          <SectionTitle>Where the time went</SectionTitle>
+          <div className="card bg-base-100 border-base-200 border shadow-sm">
+            <div className="card-body gap-3">
+              <div
+                className="bg-base-200 flex h-3 w-full overflow-hidden rounded-full"
+                role="img"
+                aria-label={`Time split across ${byArea.length} area${byArea.length === 1 ? '' : 's'}`}
+              >
+                {byArea.map((entry) => (
+                  <span
+                    key={entry.id ?? 'none'}
+                    className="h-full"
+                    style={{
+                      width: `${(entry.minutes / trackedMinutes) * 100}%`,
+                      backgroundColor: entry.color ?? 'oklch(0.7 0.02 285)',
+                    }}
+                  />
+                ))}
+              </div>
+
+              <ul className="space-y-1.5">
+                {byArea.map((entry) => (
+                  <li key={entry.id ?? 'none'} className="flex items-baseline gap-2 text-sm">
+                    <span
+                      className="size-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: entry.color ?? 'oklch(0.7 0.02 285)' }}
+                      aria-hidden="true"
+                    />
+                    <span className="font-medium">{entry.name}</span>
+                    {!entry.counts ? (
+                      <span className="badge badge-xs badge-ghost">not work</span>
+                    ) : null}
+                    <span className="text-base-content/45 ml-auto shrink-0 text-xs tabular-nums">
+                      {formatDuration(entry.minutes)} ·{' '}
+                      {Math.round((entry.minutes / trackedMinutes) * 100)}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+
+              <p className="text-base-content/55 text-sm">
+                Logged time only, so this under-reports rather than guesses. The split is the
+                useful part — where your week actually went, not how much of it there was.
+              </p>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       <SectionTitle>How your estimates are landing</SectionTitle>
 
@@ -113,6 +198,17 @@ export default async function ReviewPage() {
           )}
         </div>
       </div>
+
+      {/*
+        --- What the AI did -------------------------------------------------
+        Last on the page, and that placement is the argument: the week is read
+        through your objectives and your own numbers first. What the assistant
+        got up to is evidence you consult afterwards, not the frame.
+      */}
+      <SectionTitle>
+        <span id="activity">What the AI did</span>
+      </SectionTitle>
+      <AiActivity actions={aiActions} autonomy={autonomy} timeZone={user.timeZone} />
     </>
   );
 }

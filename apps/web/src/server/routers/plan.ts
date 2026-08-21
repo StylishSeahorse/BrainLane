@@ -65,6 +65,12 @@ export const planRouter = router({
               select: {
                 id: true,
                 title: true,
+                // The planner's tick box acts on the task, so it has to read
+                // the task's own status. A block's COMPLETED state is not the
+                // same fact: un-completing deliberately leaves an already-past
+                // block marked complete, and a row keyed off that would stay
+                // ticked for a task that is no longer done.
+                status: true,
                 energy: true,
                 priority: true,
                 timerStartedAt: true,

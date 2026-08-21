@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma, type Db, type Task } from '@fluid/db';
 import { features } from '@fluid/env';
 import { withFallback } from '@fluid/ai';
+import { localDayOfWeek, parseBraindump, startOfLocalDay } from '@fluid/core';
 import { protectedProcedure, router } from '../trpc';
 import { getAiProvider } from '../services/ai-provider';
 
@@ -21,11 +22,26 @@ const taskInput = z.object({
   estimateMinutes: z.number().int().min(5).max(480).default(30),
   deadline: z.coerce.date().optional().nullable(),
   isSplittable: z.boolean().default(true),
+  timeBucket: z
+    .enum(['SOON', 'THIS_MONTH', 'THIS_QUARTER', 'LATER', 'SOMEDAY'])
+    .optional()
+    .nullable(),
 });
 
 /** Three or more moves is the avoidance signal, per the product spec. */
 const AVOIDANCE_RESCHEDULE_THRESHOLD = 3;
 const AVOIDANCE_STALE_DAYS = 7;
+
+/**
+ * Deferrals before we suggest a task leaves the daily list entirely.
+ *
+ * Higher than the avoidance threshold on purpose: the first conversation is
+ * "shall we make this smaller?", and only after that has failed repeatedly is
+ * "this does not belong in your day" the honest thing to say.
+ */
+const STALE_DEFERRAL_THRESHOLD = 6;
+
+const timeBucket = z.enum(['SOON', 'THIS_MONTH', 'THIS_QUARTER', 'LATER', 'SOMEDAY']);
 
 export const taskRouter = router({
   list: protectedProcedure
@@ -54,11 +70,17 @@ export const taskRouter = router({
     }),
 
   create: protectedProcedure.input(taskInput).mutation(async ({ ctx, input }) => {
+    // The project seeds the area, once, at creation. After that the task owns
+    // it — so re-filing a project later never silently reclassifies work that
+    // has already been scheduled and counted.
+    let areaId: string | null = null;
     if (input.projectId) {
-      const owned = await prisma.project.count({
+      const project = await prisma.project.findFirst({
         where: { id: input.projectId, userId: ctx.user.id },
+        select: { areaId: true },
       });
-      if (owned === 0) throw new TRPCError({ code: 'NOT_FOUND', message: 'Unknown project.' });
+      if (!project) throw new TRPCError({ code: 'NOT_FOUND', message: 'Unknown project.' });
+      areaId = project.areaId;
     }
 
     return prisma.task.create({
@@ -67,15 +89,217 @@ export const taskRouter = router({
         title: input.title,
         notes: input.notes ?? null,
         projectId: input.projectId ?? null,
+        areaId,
         priority: input.priority,
         energy: input.energy,
         estimateMinutes: input.estimateMinutes,
         deadline: input.deadline ?? null,
         isSplittable: input.isSplittable,
+        timeBucket: input.timeBucket ?? null,
         status: 'READY',
       },
     });
   }),
+
+  /**
+   * The backlog, grouped by horizon.
+   *
+   * Work with no bucket falls into SOON rather than a sixth "unsorted" pile.
+   * An inbox that has to be processed before the list is usable is the thing
+   * that kills backlogs; a default that is occasionally wrong is cheaper than
+   * a chore that is always there.
+   */
+  backlog: protectedProcedure.query(async ({ ctx }) => {
+    const tasks = await prisma.task.findMany({
+      where: {
+        userId: ctx.user.id,
+        parentId: null,
+        status: { notIn: ['DONE', 'CANCELLED'] },
+        archivedAt: null,
+      },
+      include: {
+        project: { select: { id: true, name: true, color: true } },
+        scheduledBlocks: {
+          where: { state: { in: ['PROPOSED', 'ACCEPTED'] } },
+          select: { id: true },
+        },
+      },
+      orderBy: [{ deadline: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }],
+    });
+
+    const buckets = ['SOON', 'THIS_MONTH', 'THIS_QUARTER', 'LATER', 'SOMEDAY'] as const;
+    return buckets.map((bucket) => ({
+      bucket,
+      tasks: tasks.filter((task) => (task.timeBucket ?? 'SOON') === bucket),
+    }));
+  }),
+
+  /**
+   * Parse a braindump without writing anything.
+   *
+   * Split from `commitBraindump` so the user always sees what was understood
+   * before it becomes real. Capture is the moment ADHD users most need to be
+   * trusted quickly and least need a surprise — six half-right tasks appearing
+   * silently is worse than the box they were avoiding.
+   */
+  parseBraindump: protectedProcedure
+    .input(z.object({ text: z.string().trim().min(1).max(4000) }))
+    .query(async ({ ctx, input }) => {
+      return parseBraindump(input.text, {
+        todayDayOfWeek: localDayOfWeek(new Date(), ctx.user.timeZone),
+      });
+    }),
+
+  /** Create the tasks the user confirmed, exactly as shown. */
+  commitBraindump: protectedProcedure
+    .input(
+      z.object({
+        items: z
+          .array(
+            z.object({
+              title: z.string().trim().min(1).max(200),
+              estimateMinutes: z.number().int().min(5).max(480).default(30),
+              bucket: timeBucket.nullable().default(null),
+              priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
+              dueInDays: z.number().int().min(0).max(365).nullable().default(null),
+            }),
+          )
+          .min(1)
+          .max(50),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const timeZone = ctx.user.timeZone;
+
+      const created = await prisma.task.createMany({
+        data: input.items.map((item) => ({
+          userId: ctx.user.id,
+          title: item.title,
+          estimateMinutes: item.estimateMinutes,
+          priority: item.priority,
+          timeBucket: item.bucket,
+          // End of the named day, not the moment of parsing: "due Friday"
+          // means by the end of Friday, and anything else quietly loses hours.
+          deadline:
+            item.dueInDays == null
+              ? null
+              : startOfLocalDay(new Date(), timeZone, item.dueInDays + 1),
+          status: 'READY' as const,
+        })),
+      });
+
+      return { count: created.count };
+    }),
+
+  setBucket: protectedProcedure
+    .input(z.object({ id: z.string().cuid(), bucket: timeBucket.nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await prisma.task.updateMany({
+        where: { id: input.id, userId: ctx.user.id },
+        data: { timeBucket: input.bucket, lastTouchedAt: new Date() },
+      });
+      if (result.count === 0) throw new TRPCError({ code: 'NOT_FOUND' });
+    }),
+
+  /**
+   * Tasks that have been pushed so many times they are clearly not going to
+   * happen by being asked about again tomorrow.
+   *
+   * Surfaced as a question, never acted on automatically. "You have moved this
+   * eight times" is a fact worth showing; deciding on the user's behalf that
+   * it no longer matters is not ours to make.
+   */
+  stale: protectedProcedure.query(async ({ ctx }) => {
+    return prisma.task.findMany({
+      where: {
+        userId: ctx.user.id,
+        parentId: null,
+        status: { notIn: ['DONE', 'CANCELLED'] },
+        archivedAt: null,
+        rescheduleCount: { gte: STALE_DEFERRAL_THRESHOLD },
+      },
+      select: { id: true, title: true, rescheduleCount: true, lastTouchedAt: true },
+      orderBy: { rescheduleCount: 'desc' },
+      take: 5,
+    });
+  }),
+
+  /**
+   * Move a stale task off the daily list without deleting it.
+   *
+   * Archiving clears the deferral count as well: the task is starting a new
+   * life in the backlog, and carrying "moved 8 times" forward would mean it
+   * gets flagged again the moment it is picked back up.
+   */
+  archive: protectedProcedure
+    .input(z.object({ id: z.string().cuid(), bucket: timeBucket.default('SOMEDAY') }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await prisma.task.updateMany({
+        where: { id: input.id, userId: ctx.user.id },
+        data: {
+          archivedAt: new Date(),
+          timeBucket: input.bucket,
+          earliestStart: null,
+          rescheduleCount: 0,
+          lastTouchedAt: new Date(),
+        },
+      });
+      if (result.count === 0) throw new TRPCError({ code: 'NOT_FOUND' });
+      await prisma.scheduledBlock.deleteMany({
+        where: { taskId: input.id, state: { in: ['PROPOSED', 'ACCEPTED'] } },
+      });
+    }),
+
+  /** Undo an archive — reversibility is the price of an automated suggestion. */
+  unarchive: protectedProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await prisma.task.updateMany({
+        where: { id: input.id, userId: ctx.user.id },
+        data: { archivedAt: null, lastTouchedAt: new Date() },
+      });
+      if (result.count === 0) throw new TRPCError({ code: 'NOT_FOUND' });
+    }),
+
+  /**
+   * What this kind of task has actually taken before.
+   *
+   * Plain statistics over the user's own history — no model call. The median
+   * is the headline because a single four-hour outlier should not drag the
+   * suggestion up for every future twenty-minute email.
+   */
+  estimateSuggestion: protectedProcedure
+    .input(z.object({ title: z.string().trim().min(1).max(200) }))
+    .query(async ({ ctx, input }) => {
+      const category = categoryFor(input.title);
+      const samples = await prisma.timeEstimateSample.findMany({
+        where: { userId: ctx.user.id, category },
+        select: { actualMinutes: true },
+        orderBy: { recordedAt: 'desc' },
+        take: 30,
+      });
+
+      // Two points is a coincidence, not a pattern. Saying nothing is better
+      // than a confident number drawn from one previous afternoon.
+      if (samples.length < 3) return { category, sampleCount: samples.length, suggestion: null };
+
+      const sorted = samples.map((sample) => sample.actualMinutes).sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      const median =
+        sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
+      const average = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+
+      return {
+        category,
+        sampleCount: sorted.length,
+        suggestion: {
+          // Rounded to five minutes: the precision of "37 minutes" is fake,
+          // and a round number is easier to accept or overrule.
+          medianMinutes: Math.max(5, Math.round(median / 5) * 5),
+          averageMinutes: Math.max(5, Math.round(average / 5) * 5),
+        },
+      };
+    }),
 
   update: protectedProcedure
     .input(taskInput.partial().extend({ id: z.string().cuid() }))

@@ -7,6 +7,10 @@ import { agentRouter } from './agent';
 import { aiRouter } from './ai';
 import { calendarRouter } from './calendar';
 import { routineRouter } from './routine';
+import { dayRouter } from './day';
+import { boardRouter } from './board';
+import { areaRouter } from './area';
+import { objectiveRouter } from './objective';
 
 export const appRouter = router({
   task: taskRouter,
@@ -16,6 +20,10 @@ export const appRouter = router({
   ai: aiRouter,
   calendar: calendarRouter,
   routine: routineRouter,
+  day: dayRouter,
+  board: boardRouter,
+  area: areaRouter,
+  objective: objectiveRouter,
 });
 
 export type AppRouter = typeof appRouter;

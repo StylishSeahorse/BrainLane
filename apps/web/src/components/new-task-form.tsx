@@ -1,7 +1,8 @@
 'use client';
 
-import { useActionState, useRef } from 'react';
+import { useActionState, useRef, useState } from 'react';
 import { createTask, type ActionState } from '@/app/actions';
+import { EstimateHint } from '@/components/estimate-hint';
 
 /**
  * Progressive disclosure: one field visible by default.
@@ -13,6 +14,10 @@ import { createTask, type ActionState } from '@/app/actions';
 export function NewTaskForm({ projects }: { projects: Array<{ id: string; name: string }> }) {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(createTask, undefined);
   const formRef = useRef<HTMLFormElement>(null);
+  const estimateRef = useRef<HTMLInputElement>(null);
+  // Mirrored into state only so the estimate hint can react to it; the field
+  // itself stays uncontrolled, which is what lets `form.reset()` work.
+  const [title, setTitle] = useState('');
 
   return (
     <form
@@ -20,6 +25,7 @@ export function NewTaskForm({ projects }: { projects: Array<{ id: string; name: 
       action={async (formData) => {
         await formAction(formData);
         formRef.current?.reset();
+        setTitle('');
       }}
       className="card bg-base-100 border-base-200 border shadow-sm"
     >
@@ -40,6 +46,8 @@ export function NewTaskForm({ projects }: { projects: Array<{ id: string; name: 
             placeholder="What needs doing?"
             aria-label="Task title"
             className="input join-item w-full"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
           />
           <button type="submit" className="btn btn-primary join-item" disabled={pending}>
             {pending ? <span className="loading loading-spinner loading-xs" /> : 'Add'}
@@ -72,6 +80,7 @@ export function NewTaskForm({ projects }: { projects: Array<{ id: string; name: 
               <fieldset className="fieldset">
                 <legend className="fieldset-legend">Estimate (minutes)</legend>
                 <input
+                  ref={estimateRef}
                   name="estimateMinutes"
                   type="number"
                   min={5}
@@ -79,6 +88,12 @@ export function NewTaskForm({ projects }: { projects: Array<{ id: string; name: 
                   step={5}
                   defaultValue={30}
                   className="input w-full"
+                />
+                <EstimateHint
+                  title={title}
+                  onAccept={(minutes) => {
+                    if (estimateRef.current) estimateRef.current.value = String(minutes);
+                  }}
                 />
               </fieldset>
 

@@ -43,6 +43,7 @@ model User {
   // apply before any data loads — see UserPreferences for the rest.
   preferences         UserPreferences?
   sessions            Session[]
+  areas               Area[]
   projects            Project[]
   tasks               Task[]
   calendarConnections CalendarConnection[]
@@ -52,6 +53,8 @@ model User {
   protectedTimes      ProtectedTime[]
   planVersions        PlanVersion[]
   estimateSamples     TimeEstimateSample[]
+  objectives          Objective[]
+  dayLogs             DayLog[]
   aiSetting           AiSetting?
   aiActions           AiAction[]
   auditLogs           AuditLog[]
@@ -109,21 +112,21 @@ model UserPreferences {
 
   // --- Accessibility. Co-occurring conditions are common; these are defaults,
   // --- not an afterthought behind a settings page nobody opens.
-  highContrast   Boolean @default(false)
-  reducedMotion  Boolean @default(false)
-  dyslexiaFont   Boolean @default(false)
-  largeText      Boolean @default(false)
+  highContrast  Boolean @default(false)
+  reducedMotion Boolean @default(false)
+  dyslexiaFont  Boolean @default(false)
+  largeText     Boolean @default(false)
 
   // --- Scheduling behaviour
   /// Minutes of breathing room inserted between scheduled blocks. Transitions
   /// cost more for ADHD users than the calendar suggests.
-  bufferMinutes       Int     @default(10)
+  bufferMinutes      Int @default(10)
   /// How long a plan diff waits before auto-accepting. 0 disables auto-accept
   /// entirely — some people need the control, others need the decision made.
-  autoAcceptSeconds   Int     @default(30)
+  autoAcceptSeconds  Int @default(30)
   /// Cap on how much the scheduler may reshuffle in one replan. A schedule that
   /// churns is a schedule users stop trusting.
-  maxDailyReshuffles  Int     @default(3)
+  maxDailyReshuffles Int @default(3)
 
   // --- AI autonomy
   /// How much freedom the AI has to change the calendar without being asked.
@@ -135,9 +138,23 @@ model UserPreferences {
   /// How much of the calendar one autonomous pass may rewrite.
   aiActionScope     ActionScope   @default(TODAY)
 
+  // --- Focus rhythm
+  /// Offer a break after this many minutes of unbroken work.
+  ///
+  /// A prompt, never an interruption: it can be pushed back or ignored, and
+  /// nothing pauses on its own. Hyperfocus is not a bug to be corrected, and a
+  /// tool that yanks someone out of it is one they turn off.
+  ///
+  /// Accepting a break *does* stop the task timer, so time away is never
+  /// logged as work — that dataset is what every estimate in the app is
+  /// calibrated against.
+  pomodoroEnabled      Boolean @default(true)
+  pomodoroWorkMinutes  Int     @default(50)
+  pomodoroBreakMinutes Int     @default(10)
+
   // --- Nudges
-  nudgeTone     NudgeTone @default(NEUTRAL)
-  nudgesEnabled Boolean   @default(true)
+  nudgeTone       NudgeTone @default(NEUTRAL)
+  nudgesEnabled   Boolean   @default(true)
   quietHoursStart String? // "22:00" local
   quietHoursEnd   String? // "08:00" local
 
@@ -180,20 +197,20 @@ model CalendarConnection {
   /// token itself lives inside encryptedCredentials.
   accessTokenExpiresAt DateTime?
 
-  status         ConnectionStatus @default(ACTIVE)
+  status       ConnectionStatus @default(ACTIVE)
   /// Human-readable reason the connection needs attention. Surfaced verbatim in
   /// the sync log — silent failure is what destroys trust in a sync product.
-  statusDetail   String?
+  statusDetail String?
 
-  lastSyncAt     DateTime?
-  lastSyncError  String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  lastSyncAt    DateTime?
+  lastSyncError String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  calendars   Calendar[]
-  syncLogs    SyncLog[]
-  pendingOps  PendingRemoteOp[]
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendars  Calendar[]
+  syncLogs   SyncLog[]
+  pendingOps PendingRemoteOp[]
 
   @@unique([userId, provider, accountIdentifier])
   @@index([status])
@@ -216,9 +233,9 @@ model Calendar {
 
   /// Whether the provider grants us write access. Read-only calendars must
   /// never receive scheduled blocks — we check this before proposing writes.
-  canWrite   Boolean @default(false)
+  canWrite      Boolean @default(false)
   /// User chose to show this calendar's events as busy time.
-  isSelected Boolean @default(true)
+  isSelected    Boolean @default(true)
   /// Exactly one calendar per user receives app-created blocks. Partial unique
   /// index enforcing this is added in the migration.
   isWriteTarget Boolean @default(false)
@@ -233,12 +250,12 @@ model Calendar {
   needsFullResync Boolean @default(false)
 
   // --- Push subscription (Google/Graph only; CalDAV polls) ---------------------
-  watchChannelId    String?
-  watchResourceId   String?
-  watchExpiresAt    DateTime?
+  watchChannelId   String?
+  watchResourceId  String?
+  watchExpiresAt   DateTime?
   /// Digest of the channel token we handed the provider, so a webhook can be
   /// matched to a subscription without storing the token itself.
-  watchTokenDigest  String?
+  watchTokenDigest String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -351,9 +368,49 @@ enum ProjectStatus {
   COMPLETED
 }
 
-model Project {
+/// A context: Work, Personal, the side project. One level above projects.
+///
+/// Sunsama calls these contexts and hangs channels off them; the naming here is
+/// Area → Project → Task. The point is not tidiness — it is that not all of a
+/// day's work belongs to the same ledger. Booking a dentist appointment at 11am
+/// consumes eleven o'clock exactly as a meeting does, but counting it as
+/// *work delivered* makes every capacity number and every review subtly false.
+model Area {
   id     String @id @default(cuid())
   userId String
+
+  name  String
+  color String?
+
+  /// Does work in this area compete for the working day's capacity?
+  ///
+  /// When false, its scheduled time is treated the way meetings are: it still
+  /// reduces the free time available — it is real time and pretending
+  /// otherwise would invent capacity nobody has — but it is reported
+  /// separately rather than counted as the day's committed work.
+  countsTowardCapacity Boolean @default(true)
+
+  /// Display order, lowest first.
+  position Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects Project[]
+  tasks    Task[]
+
+  @@unique([userId, name])
+  @@index([userId, position])
+  @@map("areas")
+}
+
+model Project {
+  id     String  @id @default(cuid())
+  userId String
+  /// The context this project sits in. Seeds the area of tasks created here;
+  /// it does not override one a task already carries.
+  areaId String?
 
   name        String
   description String?
@@ -371,20 +428,22 @@ model Project {
   updatedAt DateTime @updatedAt
 
   user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area       Area?       @relation(fields: [areaId], references: [id], onDelete: SetNull)
   tasks      Task[]
   milestones Milestone[]
 
   @@index([userId, status])
+  @@index([areaId])
   @@map("projects")
 }
 
 model Milestone {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   projectId String
   name      String
-  dueAt     DateTime @db.Timestamptz(3)
+  dueAt     DateTime  @db.Timestamptz(3)
   reachedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -408,6 +467,22 @@ enum Priority {
   URGENT
 }
 
+/// Roughly when a backlog item wants to happen.
+///
+/// Deliberately coarse. A precise date on work nobody has committed to is a
+/// lie that later reads as a missed deadline, and for the ADHD user that is a
+/// guilt generator rather than a plan. Buckets let someone say "sometime this
+/// month" and be honestly right.
+enum TimeBucket {
+  /// The next week or two.
+  SOON
+  THIS_MONTH
+  THIS_QUARTER
+  LATER
+  /// Genuinely undated. Kept visible so it does not rot in a list nobody reads.
+  SOMEDAY
+}
+
 /// How much cognitive fuel a task needs. Matched against EnergyWindow so deep
 /// work does not get scheduled into a known low-focus slot.
 enum EnergyLevel {
@@ -417,11 +492,23 @@ enum EnergyLevel {
 }
 
 model Task {
-  id        String  @id @default(cuid())
-  userId    String
-  projectId String?
+  id          String  @id @default(cuid())
+  userId      String
+  projectId   String?
   /// Self-reference for subtasks. AI breakdown writes children here.
-  parentId  String?
+  parentId    String?
+  /// The week's intention this work serves, if any. Optional on purpose —
+  /// making every task justify itself against a goal is the kind of ceremony
+  /// that stops people capturing things at all.
+  objectiveId String?
+  /// Which context this belongs to.
+  ///
+  /// Held on the task rather than derived from its project, because the real
+  /// world does not sort that cleanly: an "Admin" project holds both a client
+  /// invoice and a dentist appointment. The project seeds this at creation;
+  /// afterwards the task owns it, so the capacity arithmetic never has to
+  /// resolve a two-level fallback at the moment it matters.
+  areaId      String?
 
   title String
   notes String?
@@ -432,17 +519,46 @@ model Task {
 
   // --- Time -------------------------------------------------------------------
   /// What the user thinks it will take.
-  estimateMinutes Int @default(30)
+  estimateMinutes         Int  @default(30)
   /// What the estimation coach thinks it will take, from this user's own
   /// history. Never overwrites the user's number — shown beside it.
   adjustedEstimateMinutes Int?
   /// Accumulated from completed focus sessions.
-  actualMinutes Int @default(0)
+  actualMinutes           Int  @default(0)
 
   deadline      DateTime? @db.Timestamptz(3)
   /// Do not schedule before this — waiting on someone, or simply not yet
   /// relevant.
   earliestStart DateTime? @db.Timestamptz(3)
+
+  /// Which rough horizon this sits in while it waits in the backlog. Null once
+  /// the task has a real date or is actively being scheduled.
+  timeBucket TimeBucket?
+  /// Set when a repeatedly-deferred task was moved out of the daily list by
+  /// the stale check, so we do not ask about it again the next morning.
+  archivedAt DateTime?
+
+  // --- Day commitment ---------------------------------------------------------
+  /// The day the user committed this to — local midnight, stored as an instant.
+  ///
+  /// This is the line between "this exists" and "I am doing this today". A
+  /// backlog item is a record; a task with a `plannedFor` is a promise, and the
+  /// scheduler treats it as one: work lands inside this day ahead of anything
+  /// the optimizer would otherwise prefer.
+  ///
+  /// Distinct from `deadline` (when it is *due*) and from a ScheduledBlock
+  /// (when exactly it happens). Keeping them apart is what allows a day to be
+  /// planned as an ordered list before any of it is timeboxed.
+  plannedFor    DateTime? @db.Timestamptz(3)
+  /// Position within that day's list, lowest first. The user's ordering is a
+  /// decision in its own right — auto-sort may seed it, never overwrite it.
+  dayOrder      Int       @default(0)
+  /// How many times this has been carried from one day to the next.
+  ///
+  /// Separate from `rescheduleCount`, which counts the scheduler moving a block
+  /// around. This counts the user pushing a promise to tomorrow, which is the
+  /// signal that actually predicts a task never getting done.
+  rolloverCount Int       @default(0)
 
   // --- Chunking ---------------------------------------------------------------
   /// May the scheduler split this across multiple sittings?
@@ -455,11 +571,11 @@ model Task {
   // --- ADHD signals -----------------------------------------------------------
   /// Times this task has been moved by a replan or a user deferral. Three or
   /// more is the avoidance-detection trigger.
-  rescheduleCount Int      @default(0)
+  rescheduleCount         Int       @default(0)
   /// Any interaction at all. Distinguishes "avoided" from "not yet reached".
-  lastTouchedAt   DateTime @default(now())
+  lastTouchedAt           DateTime  @default(now())
   /// A low-friction entry point, generated on demand by "Just start".
-  starterStep     String?
+  starterStep             String?
   /// Set when the user has acknowledged an avoidance check-in, so we ask about
   /// this task once and then leave them alone.
   avoidanceAcknowledgedAt DateTime?
@@ -467,16 +583,18 @@ model Task {
   /// one task per user may have this set — enforced in the service layer,
   /// which stops any other running timer before starting a new one, rather
   /// than by a database constraint that would need to reach across rows.
-  timerStartedAt DateTime? @db.Timestamptz(3)
+  timerStartedAt          DateTime? @db.Timestamptz(3)
 
   completedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  project  Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  parent   Task?    @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
-  subtasks Task[]   @relation("Subtasks")
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent    Task?      @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks  Task[]     @relation("Subtasks")
+  objective Objective? @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
+  area      Area?      @relation(fields: [areaId], references: [id], onDelete: SetNull)
 
   blockedBy       TaskDependency[]     @relation("DependentTask")
   blocks          TaskDependency[]     @relation("PrerequisiteTask")
@@ -485,9 +603,93 @@ model Task {
 
   @@index([userId, status])
   @@index([userId, deadline])
+  @@index([userId, timeBucket])
+  // The board reads one week at a time, ordered within each day.
+  @@index([userId, plannedFor, dayOrder])
   @@index([projectId])
   @@index([parentId])
+  @@index([objectiveId])
+  @@index([areaId])
   @@map("tasks")
+}
+
+// ---------------------------------------------------------------------------
+// Intentions and the shape of a day
+// ---------------------------------------------------------------------------
+
+/// A week's intention, sitting one level above tasks.
+///
+/// Answers "why am I doing these?" without becoming a project plan. Anchored
+/// to the Monday of its week rather than carrying a date range, so "this week"
+/// is a lookup rather than an interval query.
+model Objective {
+  id     String @id @default(cuid())
+  userId String
+
+  title String
+  notes String?
+
+  /// Local Monday 00:00 of the week this belongs to, stored as an instant.
+  weekStart DateTime @db.Timestamptz(3)
+
+  /// Set when the user ticks it off in the weekly review. Progress is otherwise
+  /// derived from the linked tasks, never from a manual percentage.
+  achievedAt   DateTime?
+  /// Carried forward from a previous week, so "this keeps slipping" is legible
+  /// without inventing a rollover table.
+  rolledFromId String?
+
+  /// Ordering within the week, lowest first. The user's ranking is the point:
+  /// objective #1 is what the week is actually about.
+  position Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks Task[]
+
+  @@index([userId, weekStart])
+  @@map("objectives")
+}
+
+/// One day's ritual state: when it was planned, when it was closed, and what
+/// the person made of it.
+///
+/// Separate from tasks because a day is its own object here — Sunsama's whole
+/// premise is that a plan is a commitment to a day, not a property of a task.
+/// Having this row also makes "did you already shut down?" answerable without
+/// inferring it from completion counts.
+model DayLog {
+  id     String @id @default(cuid())
+  userId String
+
+  /// Local midnight of the day this describes, stored as an instant.
+  day DateTime @db.Timestamptz(3)
+
+  /// When the user finished the morning plan, if they ran it.
+  plannedAt  DateTime?
+  /// When the user deliberately ended the workday.
+  shutdownAt DateTime?
+
+  /// Free text the user wrote at shutdown. Never analysed or fed to the AI
+  /// without consent — it is a diary line, not training data.
+  reflection String?
+
+  /// Frozen at shutdown so the history stays honest even as tasks change
+  /// later. Recomputing these from live rows would rewrite the past.
+  completedCount Int @default(0)
+  focusedMinutes Int @default(0)
+  meetingMinutes Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+  @@index([userId, day])
+  @@map("day_logs")
 }
 
 model TaskDependency {
@@ -659,7 +861,7 @@ model EnergyWindow {
   id     String @id @default(cuid())
   userId String
 
-  dayOfWeek Int?  // null = every day
+  dayOfWeek Int? // null = every day
   startTime String
   endTime   String
   level     EnergyLevel
@@ -686,8 +888,8 @@ model ProtectedTime {
   id     String @id @default(cuid())
   userId String
 
-  kind  ProtectedTimeKind @default(ROUTINE)
-  label String?
+  kind    ProtectedTimeKind @default(ROUTINE)
+  label   String?
   /// Rows created from one multi-day pick (e.g. "weekdays") share this value,
   /// so the settings UI can show and delete them as the one routine they are,
   /// rather than as N unrelated rows — `dayOfWeek` only ever holds a single
@@ -720,7 +922,7 @@ model ProtectedTime {
 /// derives a per-category correction factor from these. ADHD users typically
 /// underestimate by a consistent multiple, which makes this learnable.
 model TimeEstimateSample {
-  id     String @id @default(cuid())
+  id     String  @id @default(cuid())
   userId String
   taskId String?
 
@@ -779,17 +981,17 @@ model PendingRemoteOp {
   idempotencyKey String @unique
 
   /// Local event this operation is about.
-  eventId String?
+  eventId      String?
   /// Provider id, when known (UPDATE/DELETE).
-  externalId String?
+  externalId   String?
   /// ETag to send as an If-Match precondition.
   expectedEtag String?
 
   /// Serialized event payload for CREATE/UPDATE.
   payload Json?
 
-  attempts    Int       @default(0)
-  lastError   String?
+  attempts      Int      @default(0)
+  lastError     String?
   /// Exponential backoff target.
   nextAttemptAt DateTime @default(now())
 
@@ -862,7 +1064,7 @@ enum ConflictResolution {
 /// remains recoverable — this is the difference between a conflict policy and
 /// data loss.
 model SyncConflict {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   calendarId String
   eventId    String?
 
@@ -900,15 +1102,15 @@ model AiSetting {
   /// an enum would mean a database migration every time someone wants to use a
   /// new one. Unknown values fall back to the default provider rather than
   /// breaking the account.
-  providerId String @default("anthropic")
+  providerId      String  @default("anthropic")
   /// Null falls back to the provider's default model.
-  model    String?
+  model           String?
   /// Envelope-encrypted, purpose `ai-api-key`. Null uses the server key, if one
   /// is configured.
   encryptedApiKey String?
   /// Only honoured for providers the registry marks as self-hosted. Validated
   /// against the SSRF guard before any request is made.
-  baseUrl String?
+  baseUrl         String?
 
   // --- Per-feature consent. Off by default is the wrong default for a feature
   // --- people came for; on by default is the wrong default for their data. We
@@ -979,11 +1181,11 @@ model AiAction {
   taskId  String?
 
   /// Shown to the user: "moved to make room for your call".
-  reason String
+  reason      String
   /// Present when a boundary was hit, explaining which one and why.
   explanation String?
   /// The boundary name from the validator, for filtering and metrics.
-  boundary String?
+  boundary    String?
 
   /// Enough state to put things back exactly as they were.
   beforeState Json?

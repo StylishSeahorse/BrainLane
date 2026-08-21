@@ -33,6 +33,42 @@ services:
       timeout: 5s
       retries: 10
 
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fluid-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # In-network addresses, deliberately not `${DATABASE_URL}` /
+      # `${REDIS_URL}` from .env — those point at the host-mapped ports
+      # (5433/6380) for tools running outside Docker. Inside the compose
+      # network this container reaches the others by service name on their
+      # real internal ports.
+      DATABASE_URL: postgresql://fluid:fluid_dev_password@postgres:5432/fluid
+      REDIS_URL: redis://redis:6379
+      APP_URL: http://localhost:3030
+      # Genuinely secret values still come from .env, which Compose loads
+      # automatically for `${...}` substitution — nothing sensitive is
+      # hardcoded here. `:?` fails fast with an explanation rather than
+      # starting the app with a key it cannot actually decrypt anything with.
+      # See .env.example for how to generate one — the message has to stay
+      # quote-free, since YAML has no clean way to nest the node -e snippet's
+      # own quotes inside this value.
+      ENCRYPTION_KEK: '${ENCRYPTION_KEK:?Set ENCRYPTION_KEK in .env. See .env.example for how to generate one.}'
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_DISABLED: ${AI_DISABLED:-0}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_WEBHOOK_URL: ${GOOGLE_WEBHOOK_URL:-}
+    ports:
+      - "3030:3030"
+
 volumes:
   fluid-pgdata:
   fluid-redisdata:
