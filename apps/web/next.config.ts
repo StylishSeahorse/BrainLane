@@ -1,6 +1,11 @@
 import type { NextConfig } from 'next';
 
 const config: NextConfig = {
+  // Traces the runtime dependency graph into `.next/standalone` — a `server.js`
+  // plus only the node_modules actually required, rather than the full
+  // workspace tree. This is what keeps the Docker runtime image small and
+  // free of devDependencies, build tooling, and the other workspace apps.
+  output: 'standalone',
   // Workspace packages ship raw TypeScript, so Next compiles them itself.
   transpilePackages: [
     '@fluid/ai',

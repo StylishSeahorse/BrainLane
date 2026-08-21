@@ -5,9 +5,15 @@ negotiate a realistic schedule: it breaks work into re-entry points, shows every
 change as a plain-language diff before applying it, and notices when a task keeps
 moving.
 
-**Status: running.** Auth, task/project CRUD, the scheduler, the calendar UI, the
-ADHD surfaces and the AI calendar agent all work end to end. Two-way calendar sync
-is interface-complete but not wired to a live provider. See
+The shape is Sunsama's, the engine is Motion's. You choose which **day** work
+belongs to — on the Week board or in the morning ritual — and the scheduler works
+out **when** inside it, around your meetings. Neither half is allowed to overrule
+the other: the AI never picks your day, and you never have to hand-place a block.
+
+**Status: running.** Auth, task/project CRUD, the scheduler, the Week board, the
+morning ritual, focus mode, the calendar UI, the ADHD surfaces and the AI calendar
+agent all work end to end. Two-way calendar sync is interface-complete but not
+wired to a live provider. See
 [What exists / what doesn't](#what-exists--what-doesnt).
 
 ---
@@ -39,7 +45,7 @@ npm run verify
 Then `npm run db:seed` and `npm run dev` — the app is on **http://localhost:3030**,
 and the seeded account is `demo@fluid.local` / `demo-password-1234`.
 
-`verify` runs lint, typecheck, and the test suite — currently 174 tests, all passing.
+`verify` runs lint, typecheck, and the test suite — currently 324 tests, all passing.
 Postgres listens on **5433** and Redis on **6380** (non-default, so they don't collide
 with anything already running locally).
 
@@ -63,7 +69,31 @@ exhaustively in milliseconds.
 
 ---
 
-## The seven decisions worth knowing
+## Where things live
+
+Five destinations, one per question someone actually arrives with:
+
+| | |
+|---|---|
+| **Today** | What am I doing now? The day as a list beside the day as a timeline, plus the rituals that bracket it. |
+| **Week** | Which day does this belong to? Board, Calendar and Agenda are *lenses* on one page — same seven days, three readings. |
+| **Tasks** | What exists at all? Backlog by horizon, projects, braindump capture. |
+| **Review** | How did that go? Objectives, estimate calibration, where the time went, and what the AI did. |
+| **Settings** | How should this behave? Accessibility, areas, routines, focus rhythm, AI autonomy and provider, calendars. |
+
+Two full-screen flows sit outside the sidebar because they are things you *enter*
+rather than places you browse: the morning ritual (`/plan-day`) and focus mode
+(`/focus`), both reached from Today.
+
+Board, Calendar, Routines and Activity used to be top-level entries. The first two
+were one week of data wearing three hats; the second two were misfiled —
+routines are configuration you set once, and the AI log is evidence you read
+during a review. Old URLs redirect, carrying the week or view they were pointing
+at, so nothing bookmarked dead-ends.
+
+---
+
+## The nine decisions worth knowing
 
 ### 1. Ownership decides who may write an event — not timestamps
 
@@ -196,6 +226,81 @@ redirects never followed. 17 tests, including the IPv4-mapped-IPv6 bypass
 Keys are envelope-encrypted per user and **write-only**: there is no read path back to the
 browser, and the settings screen only ever reports whether a key is stored.
 
+### 8. A day is a commitment, and the user makes it — the AI only says when
+
+Motion auto-schedules everything and decides for you. Sunsama makes you choose a
+day for each task and leaves the timing to you. Both halves are load-bearing, and
+this app runs them together rather than picking one.
+
+`Task.plannedFor` is the seam. It is the line between *this exists* and *I am doing
+this*, and it is set by exactly one kind of gesture: a person putting a card on a
+day, on the board or in the morning ritual. Nothing infers it, and committing to a
+day never edits the estimate, deadline or priority of the thing being committed —
+a planning gesture that quietly rewrites its subject is how a board loses trust.
+
+The scheduler then treats that day as a window (`SchedulableTask.committedTo`) and
+orders committed work ahead of everything else. It is deliberately a **soft**
+constraint, relaxed in a fixed order: the chosen day first, then the deadline.
+Energy is relaxed before either, inside `findSlot`.
+
+Refusing to schedule work that overflows its day would be the easy call and the
+wrong one — it punishes someone for a plan that was slightly optimistic, which is
+the guilt loop the product exists to interrupt. So the work is placed anyway and
+the spill is *reported*: `Plan.spilled`, and on the board a card that could not be
+honoured shows `→ Mon` instead of a time. Silently relocating it — Motion's
+behaviour and its most-cited ADHD complaint — is the one option not on the table.
+
+Three consequences fall out, and each has a test:
+
+- **Day commitment outranks priority.** Priority is the scheduler's opinion; a day
+  is the user's decision, and the second wins. It costs little in practice, because
+  work committed to Friday can only be placed on Friday anyway.
+- **Stability yields to a new commitment.** The churn-minimizing pass normally keeps
+  any block that is still legal — which would silently undo every drag, since the
+  old block is still perfectly legal. A retained block outside `committedTo` is
+  released.
+- **Protected time still wins.** A commitment is a preference. Protected and
+  hyperfocus time are not, and the ordering in decision 3 is unchanged.
+
+The day columns report load as *blocks actually booked on that day* plus *committed
+work with no time yet*. Summing card estimates alone would show a comfortable Friday
+with three hours of overflow sitting on it; using only booked minutes would leave the
+bar motionless at the exact moment a card is dropped on it and the number is being
+consulted.
+
+### 9. Not all time belongs to the same ledger
+
+An `Area` is a context one level above a project — Work, Personal, the band —
+and it carries exactly one behavioural flag: `countsTowardCapacity`.
+
+The obvious implementation of "exclude personal work from my work capacity" is
+to drop it from the arithmetic. That is wrong, and wrong in the direction that
+matters: a dentist appointment at 11am genuinely removes eleven o'clock from the
+working day, so excluding it reports free time that does not exist — the exact
+failure the capacity meter is built to prevent.
+
+So personal time is treated the way meetings already are. It reduces
+`capacityMinutes`; it is *not* counted in `committedMinutes`. The day gets
+smaller, and what the day owes stays honest. `computeCapacity` charges each
+minute once: personal time already covered by a meeting or a routine is not a
+third deduction.
+
+The same split has to hold everywhere the ledger is visible, or the screens
+start contradicting each other. Three places had to be brought into line:
+
+- The board's day columns count *booked* minutes plus *committed-but-unplaced*
+  estimates — and the unplaced half filters by the same flag, or the bar would
+  jump the moment the scheduler ran.
+- Daily highlights key their groups on `(project, countsTowardCapacity)` rather
+  than project alone. An "Admin" project holding a client invoice *and* a
+  dentist appointment must not report the appointment as work delivered.
+- The area lives on the **task**, seeded from its project at creation and owned
+  by the task thereafter — so re-filing a project later never silently
+  reclassifies work that has already been scheduled and counted.
+
+Deleting an area is `SetNull` on both foreign keys. Losing a label must never be
+a way to lose the thing it was labelling.
+
 ---
 
 ## Security controls in place
@@ -250,12 +355,28 @@ provider signal"*, the property that stops a full resync becoming mass data loss
 
 ## What exists / what doesn't
 
-**Working end to end** (174 tests):
+**Working end to end** (324 tests):
 
 - Signup / login / logout, DB-backed sessions, per-page auth guard
 - Task and project CRUD; progressive-disclosure capture form
 - Deterministic scheduler with the full constraint set + plan diff
-- Week grid and list calendar views, timezone-correct
+- **Week** (`/week`) — one destination, three lenses on the same seven days:
+  **Board** (days as columns, drag work onto the day you mean to do it, with
+  per-column capacity), **Calendar** (the time grid), and **Agenda** (the list).
+  On the board, drag is the fast path; every card also carries a "move to" menu,
+  because native HTML5 dragging is invisible to keyboards and awkward on touch
+- **Day commitments** — `plannedFor` as a soft scheduling window, with spill
+  reported rather than hidden (decision 8)
+- **Morning ritual** (`/plan-day`) — close off yesterday, choose today against a
+  live capacity meter, confirm, then hand it to the scheduler
+- **Focus mode** (`/focus`) — the day as a sequence rather than a grid, with times
+  projected from the clock so an overrun moves everything after it
+- **Areas** — contexts above projects, with the capacity ledger split (decision 9),
+  colour on the board, and a where-the-time-went breakdown on Review
+- **Daily highlights** — what the day added up to, grouped and copyable, built from
+  logged minutes rather than estimates
+- **Break prompts** — offered after a configurable stretch, never imposed. Taking one
+  stops the timer, so time away is never logged as work
 - AI calendar agent: autonomy tiers, validator, audit log, per-entry undo
 - ADHD surfaces: runway, "Just start", breakdown, avoidance check-ins, estimation coach
 - Accessibility modes applied server-side before first paint
@@ -271,8 +392,9 @@ provider signal"*, the property that stops a full resync becoming mass data loss
   the actual API requests are not. Blocks stay inside Fluid for now.
 - CalDAV and Microsoft Graph adapters (step 4 of the build order)
 - BullMQ worker — no background sync or nudge delivery yet
-- Nudges/notifications, focus timer and body doubling, Kanban and Gantt views,
-  recurring tasks, task import
+- Nudges/notifications, body doubling, Gantt view, task import
+- Booking links, an AI notetaker, and Slack/Teams delivery of the daily summary
+  (it copies to the clipboard instead)
 - AI settings toggles are enforced server-side but not yet editable in the UI
 
 The Anthropic adapter typechecks against the current API but **has not been run

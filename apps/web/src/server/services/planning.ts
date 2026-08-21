@@ -14,6 +14,7 @@ import 'server-only';
 import {
   diffPlans,
   plan as runScheduler,
+  startOfLocalDay,
   summarizeChanges,
   type PlannedBlock,
   type SchedulableTask,
@@ -38,6 +39,8 @@ export interface PlanResult {
     newEndsAt: Date | null;
   }>;
   unscheduled: Array<{ taskId: string; taskTitle: string; explanation: string }>;
+  /** Committed work that did not fit the day it was promised to. */
+  spilled: Array<{ taskId: string; taskTitle: string; explanation: string }>;
   stats: { availableMinutes: number; scheduledMinutes: number };
 }
 
@@ -97,6 +100,17 @@ export async function buildPlan(userId: string, trigger: string): Promise<PlanRe
     minChunkMinutes: task.minChunkMinutes,
     maxChunkMinutes: task.maxChunkMinutes,
     dependsOn: task.blockedBy.map((dependency) => dependency.prerequisiteId),
+    // A day the user put this on becomes a scheduling window. Expanded here
+    // rather than stored as an interval because the day's boundaries depend on
+    // the user's timezone, and a DST day is not 24 hours long.
+    ...(task.plannedFor
+      ? {
+          committedTo: {
+            start: startOfLocalDay(task.plannedFor, user.timeZone),
+            end: startOfLocalDay(task.plannedFor, user.timeZone, 1),
+          },
+        }
+      : {}),
   }));
 
   const previous: PlannedBlock[] = activeBlocks
@@ -226,6 +240,11 @@ export async function buildPlan(userId: string, trigger: string): Promise<PlanRe
       taskTitle: titles.get(entry.taskId) ?? 'Task',
       explanation: entry.explanation,
     })),
+    spilled: result.spilled.map((entry) => ({
+      taskId: entry.taskId,
+      taskTitle: titles.get(entry.taskId) ?? 'Task',
+      explanation: entry.explanation,
+    })),
     stats: {
       availableMinutes: result.stats.availableMinutes,
       scheduledMinutes: result.stats.scheduledMinutes,
@@ -233,7 +252,22 @@ export async function buildPlan(userId: string, trigger: string): Promise<PlanRe
   };
 }
 
-/** Accept a proposal: its blocks become real commitments. */
+/**
+ * Accept a proposal: its blocks become real commitments.
+ *
+ * The proposal is a *complete* schedule, not a patch — the stability pass
+ * re-emits every block it decided to keep, so the new version already contains
+ * everything that should be in force. The previously accepted blocks therefore
+ * have to be retired here, or each replan-and-accept cycle leaves its
+ * predecessor's blocks behind and the same work accumulates a duplicate
+ * session per cycle: double-counted capacity, a doubled timeline, and two
+ * calendar events for one piece of work.
+ *
+ * Three things are deliberately spared:
+ *   - COMPLETED blocks, which are history and not part of any plan.
+ *   - Pinned blocks, which the scheduler never owned and never re-emits.
+ *   - This version's own blocks, which are still PROPOSED at this point.
+ */
 export async function acceptPlan(
   userId: string,
   planVersionId: string,
@@ -246,6 +280,15 @@ export async function acceptPlan(
       where: { id: planVersionId, userId, status: 'PROPOSED' },
     });
     if (!version) return;
+
+    await tx.scheduledBlock.deleteMany({
+      where: {
+        task: { userId },
+        state: 'ACCEPTED',
+        isPinned: false,
+        planVersionId: { not: version.id },
+      },
+    });
 
     await tx.planVersion.update({
       where: { id: version.id },

@@ -84,6 +84,24 @@ export const RefreshIcon = ({ className }: IconProps) => (
   </svg>
 );
 
+export const PlusIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const ChevronLeftIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M14 6l-6 6 6 6" />
+  </svg>
+);
+
+export const ChevronRightIcon = ({ className }: IconProps) => (
+  <svg {...stroke} className={size(className)}>
+    <path d="M10 6l6 6-6 6" />
+  </svg>
+);
+
 export const ArrowRightIcon = ({ className }: IconProps) => (
   <svg {...stroke} className={className ?? 'size-4'}>
     <path d="M5 12h14M13 6l6 6-6 6" />
@@ -94,6 +112,14 @@ export const ColumnsIcon = ({ className }: IconProps) => (
   <svg {...stroke} className={className ?? 'size-4'}>
     <rect x="3" y="4" width="18" height="16" rx="2" />
     <path d="M9 4v16M15 4v16" />
+  </svg>
+);
+
+export const BoardIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className ?? 'size-5'} aria-hidden="true">
+    <rect x="3" y="4" width="4.5" height="16" rx="1.4" />
+    <rect x="9.75" y="4" width="4.5" height="11" rx="1.4" />
+    <rect x="16.5" y="4" width="4.5" height="14" rx="1.4" />
   </svg>
 );
 

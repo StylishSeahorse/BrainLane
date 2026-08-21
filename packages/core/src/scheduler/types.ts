@@ -31,6 +31,19 @@ export interface SchedulableTask {
   maxChunkMinutes: number;
   /** Ids of tasks that must be fully scheduled before this one may start. */
   dependsOn?: string[];
+  /**
+   * The day the user committed this work to, as a half-open local-day interval.
+   *
+   * This is the Sunsama half of the model: a task becomes a commitment when it
+   * is placed on a day, and that decision outranks the scheduler's own opinion
+   * about when the work would fit best.
+   *
+   * Soft, deliberately. If the day genuinely cannot hold the work, the block is
+   * still placed elsewhere and the spill is reported — refusing to schedule it
+   * would punish someone for a plan that was slightly too optimistic, which is
+   * exactly the guilt loop this product exists to avoid.
+   */
+  committedTo?: Interval;
   /** Purely for diff copy. */
   projectName?: string;
 }
@@ -135,6 +148,25 @@ export interface UnscheduledTask {
   shortfallMinutes: number;
 }
 
+/**
+ * Work that was committed to a day but could not entirely fit inside it.
+ *
+ * Reported rather than silently relocated, and separately from
+ * `UnscheduledTask`, because the two mean different things to the user: this
+ * work *is* scheduled, just not on the day they picked. Conflating them would
+ * turn "your Tuesday was too full" into "this could not be scheduled", which
+ * is both false and needlessly alarming.
+ */
+export interface SpilledCommitment {
+  taskId: string;
+  /** The day the user asked for. */
+  committedTo: Interval;
+  /** Minutes that landed outside that day. */
+  spilledMinutes: number;
+  /** Plain language, shown to the user. */
+  explanation: string;
+}
+
 export type PlanChangeKind = 'ADDED' | 'MOVED' | 'RESIZED' | 'REMOVED' | 'UNCHANGED';
 
 export interface PlanChange {
@@ -149,6 +181,8 @@ export interface PlanChange {
 export interface Plan {
   blocks: PlannedBlock[];
   unscheduled: UnscheduledTask[];
+  /** Committed work that had to be placed outside the day it was promised to. */
+  spilled: SpilledCommitment[];
   changes: PlanChange[];
   /** Diagnostics, surfaced on the sync/plan detail screen. */
   stats: {

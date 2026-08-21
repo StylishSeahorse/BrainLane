@@ -43,6 +43,12 @@ export interface WeekGridProps {
   timeZone: string;
   startHour: number;
   totalHours: number;
+  /**
+   * Drops the weekday/date header row. The planner's single-day pane sits
+   * under a header that already names the day — repeating it inside the grid
+   * just pushes the timeline down.
+   */
+  hideDayHeader?: boolean;
 }
 
 /** Aligns a drop — or a resized edge — to a readable grid, not an arbitrary minute. */
@@ -93,6 +99,7 @@ export function WeekGrid({
   timeZone,
   startHour,
   totalHours,
+  hideDayHeader = false,
 }: WeekGridProps) {
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
@@ -269,25 +276,29 @@ export function WeekGrid({
           className="grid min-w-max"
           style={{ gridTemplateColumns: `56px repeat(${days.length}, minmax(7rem, 1fr))` }}
         >
-        <div className="border-base-200 border-b" />
-        {days.map((day) => {
-          const local = toLocal(day, timeZone);
-          const isToday = isSameLocalDay(day, new Date(), timeZone);
-          return (
-            <div key={day.toISOString()} className="border-base-200 border-b border-l py-4 text-center">
-              <div
-                className={`text-[0.65rem] font-semibold uppercase tracking-[0.12em] ${
-                  isToday ? 'text-primary' : 'text-base-content/40'
-                }`}
-              >
-                {new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone }).format(day)}
-              </div>
-              <div className={`mt-1 text-2xl font-bold tracking-tight ${isToday ? 'text-primary' : ''}`}>
-                {local.day}
-              </div>
-            </div>
-          );
-        })}
+        {hideDayHeader ? null : (
+          <>
+            <div className="border-base-200 border-b" />
+            {days.map((day) => {
+              const local = toLocal(day, timeZone);
+              const isToday = isSameLocalDay(day, new Date(), timeZone);
+              return (
+                <div key={day.toISOString()} className="border-base-200 border-b border-l py-4 text-center">
+                  <div
+                    className={`text-[0.65rem] font-semibold uppercase tracking-[0.12em] ${
+                      isToday ? 'text-primary' : 'text-base-content/40'
+                    }`}
+                  >
+                    {new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone }).format(day)}
+                  </div>
+                  <div className={`mt-1 text-2xl font-bold tracking-tight ${isToday ? 'text-primary' : ''}`}>
+                    {local.day}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
 
         <div className="relative" style={{ height: `${totalHours * 4}rem` }}>
           {Array.from({ length: totalHours + 1 }, (_, index) => startHour + index)

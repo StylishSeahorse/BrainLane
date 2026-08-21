@@ -5,14 +5,12 @@ import { requireUser } from '@/server/auth/session';
 import { ActionLogPanel } from '@/components/action-log';
 import { DockLink, SidebarLink, type NavItem } from '@/components/nav';
 import {
-  ActivityIcon,
   CalendarIcon,
   DotsIcon,
   LeafIcon,
   LogoMark,
   MenuIcon,
   ReviewIcon,
-  RoutineIcon,
   SettingsIcon,
   TasksIcon,
   TodayIcon,
@@ -42,18 +40,34 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const todayBadge = dueToday + pendingPlans;
 
+  /*
+    Five destinations, one per question someone actually arrives with:
+
+      Today    — what am I doing now?
+      Week     — which day does this belong to? (board, calendar and agenda are
+                 lenses on this one page, not three separate places)
+      Tasks    — what exists at all?
+      Review   — how did that go?
+      Settings — how should this behave?
+
+    Routines and the AI activity log used to sit here too. Both were misfiled:
+    routines are configuration you set once, and the activity log is evidence
+    you read during a review. Neither earned a permanent slot competing with
+    the screens used every day.
+  */
   const nav: NavItem[] = [
     { href: '/today', label: 'Today', icon: <TodayIcon />, ...(todayBadge ? { badge: todayBadge } : {}) },
-    { href: '/calendar', label: 'Calendar', icon: <CalendarIcon /> },
+    { href: '/week', label: 'Week', icon: <CalendarIcon /> },
     // The route stays /projects — /tasks already redirects here, and this is
     // only a label change, not a URL one.
     { href: '/projects', label: 'Tasks', icon: <TasksIcon /> },
-    { href: '/routines', label: 'Routines', icon: <RoutineIcon /> },
-    { href: '/activity', label: 'Activity', icon: <ActivityIcon /> },
     { href: '/review', label: 'Review', icon: <ReviewIcon /> },
     { href: '/settings', label: 'Settings', icon: <SettingsIcon /> },
   ];
 
+  // The dock is the phone's whole navigation. It carries the four screens the
+  // day actually moves through and drops Settings, which nobody reaches for
+  // one-handed mid-transition.
   const dock = [nav[0]!, nav[1]!, nav[2]!, nav[3]!];
   const handle = user.email.split('@')[0] ?? 'you';
 
@@ -84,7 +98,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </Link>
         </header>
 
-        <main id="main" className="mx-auto w-full max-w-6xl grow px-4 pb-28 pt-6 lg:px-10 lg:pb-14 lg:pt-9">
+        <main id="main" className="mx-auto w-full max-w-7xl grow px-4 pb-28 pt-6 lg:px-10 lg:pb-14 lg:pt-9">
           {children}
         </main>
 

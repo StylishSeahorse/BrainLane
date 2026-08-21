@@ -42,6 +42,7 @@ import type {
   Priority,
   SchedulableTask,
   SchedulingInput,
+  SpilledCommitment,
   UnscheduledReason,
   UnscheduledTask,
 } from './types';
@@ -82,7 +83,20 @@ function orderTasks(tasks: SchedulableTask[], now: Date): OrderedTasks {
     return slack;
   };
 
+  /**
+   * Which day the user promised this to. Uncommitted work sorts last.
+   *
+   * This outranks priority on purpose. Priority is the scheduler's opinion
+   * about what matters; a day commitment is the user's decision about what
+   * they are actually doing, and the second should win. It costs uncommitted
+   * work very little in practice, because a task committed to Friday can only
+   * be placed on Friday anyway — the two rarely compete for the same slot.
+   */
+  const commitment = (task: SchedulableTask): number =>
+    task.committedTo ? task.committedTo.start.getTime() : Number.MAX_SAFE_INTEGER;
+
   const compare = (a: SchedulableTask, b: SchedulableTask): number =>
+    commitment(a) - commitment(b) ||
     PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] ||
     urgency(a) - urgency(b) ||
     a.id.localeCompare(b.id); // Deterministic tie-break: identical inputs must
@@ -183,12 +197,24 @@ function findSlot(
   notBefore: Date,
   requiredEnergy: SchedulableTask['energy'],
   notAfter?: Date,
+  within?: Interval,
 ): Placement | null {
+  // A commitment window narrows both ends. Intersecting here rather than
+  // filtering afterwards means the energy-relaxation passes below still get to
+  // do their job inside the chosen day.
+  let floor = notBefore;
+  let ceiling = notAfter;
+  if (within) {
+    if (within.start > floor) floor = within.start;
+    if (!ceiling || within.end < ceiling) ceiling = within.end;
+    if (floor >= ceiling) return null;
+  }
+
   for (const insistOnEnergy of [true, false]) {
     for (const slot of context.free) {
-      if (slot.end <= notBefore) continue;
+      if (slot.end <= floor) continue;
 
-      const earliest = slot.start < notBefore ? notBefore : slot.start;
+      const earliest = slot.start < floor ? floor : slot.start;
       const start = alignUp(earliest, context.granularity, context.dayAnchor);
       const end = addMinutes(start, minutes);
 
@@ -196,7 +222,7 @@ function findSlot(
       // starts immediately after this one with no breathing room.
       if (addMinutes(end, context.bufferMinutes) > slot.end && end > slot.end) continue;
       if (end > slot.end) continue;
-      if (notAfter && end > notAfter) continue;
+      if (ceiling && end > ceiling) continue;
 
       const matched = energySatisfies(energyAt(context.energy, start), requiredEnergy);
       if (insistOnEnergy && !matched) continue;
@@ -249,6 +275,7 @@ export function plan(input: SchedulingInput): Plan {
 
   const blocks: PlannedBlock[] = [];
   const unscheduled: UnscheduledTask[] = [];
+  const spilled: SpilledCommitment[] = [];
 
   // Pinned blocks are decisions the user already made. They enter the plan
   // untouched and their time is already excluded from `free`.
@@ -292,6 +319,13 @@ export function plan(input: SchedulingInput): Plan {
       if (task.earliestStart && previousBlock.start < task.earliestStart) continue;
 
       const candidate: Interval = { start: previousBlock.start, end: previousBlock.end };
+
+      // Stability yields to an explicit day commitment. Without this, dragging
+      // a task onto another day would be silently undone by the next replan:
+      // the old block is still legal and still free, so the churn-minimizing
+      // pass would keep it exactly where the user just moved it from.
+      if (task.committedTo && !contains(task.committedTo, candidate)) continue;
+
       if (!isStillFree(context.free, candidate)) continue; // Something else took it.
 
       // Do not retain more time than the task still needs — it may have shrunk.
@@ -378,6 +412,7 @@ export function plan(input: SchedulingInput): Plan {
     // Retained blocks count as already placed.
     let placedMinutes = retainedMinutes;
     let missedDeadline = false;
+    let spilledMinutes = 0;
     const placedChunks: Interval[] = [...retainedIntervals];
 
     // Continue after whatever the stability pass kept, so a task's sessions
@@ -386,16 +421,39 @@ export function plan(input: SchedulingInput): Plan {
     let cursor = lastRetainedEnd && lastRetainedEnd > notBefore ? lastRetainedEnd : notBefore;
 
     for (const chunkMinutes of chunks) {
+      // Three relaxations, in order of what the user loses by giving it up:
+      // the day they picked, then the deadline. Energy is relaxed inside
+      // findSlot, before either.
+      let placement: ReturnType<typeof findSlot> = null;
+
+      if (task.committedTo) {
+        placement = findSlot(
+          context,
+          chunkMinutes,
+          cursor,
+          task.energy,
+          task.deadline,
+          task.committedTo,
+        );
+      }
+      // Only counts as spill once the work has actually landed somewhere else.
+      // A chunk that finds no home at all is unscheduled, which is a different
+      // thing to say and is reported below.
+      const leftItsDay = task.committedTo !== undefined && placement === null;
+
       // Prefer to land the whole task before its deadline; if that is
       // impossible, still schedule the work and say so. Refusing to schedule a
       // late task helps nobody — the work does not stop existing.
-      let placement = findSlot(context, chunkMinutes, cursor, task.energy, task.deadline);
+      if (!placement) {
+        placement = findSlot(context, chunkMinutes, cursor, task.energy, task.deadline);
+      }
       if (!placement && task.deadline) {
         placement = findSlot(context, chunkMinutes, cursor, task.energy);
         if (placement) missedDeadline = true;
       }
 
       if (!placement) break;
+      if (leftItsDay) spilledMinutes += chunkMinutes;
 
       consume(context, placement.interval);
       placedChunks.push(placement.interval);
@@ -446,6 +504,17 @@ export function plan(input: SchedulingInput): Plan {
         shortfallMinutes: 0,
       });
     }
+
+    if (spilledMinutes > 0 && task.committedTo) {
+      spilled.push({
+        taskId: task.id,
+        committedTo: task.committedTo,
+        spilledMinutes,
+        explanation:
+          `That day was already full, so ${spilledMinutes} minutes of "${task.title}" ` +
+          `moved to the next opening. Nothing was dropped.`,
+      });
+    }
   }
 
   blocks.sort((a, b) => a.start.getTime() - b.start.getTime() || a.taskId.localeCompare(b.taskId));
@@ -453,6 +522,7 @@ export function plan(input: SchedulingInput): Plan {
   return {
     blocks,
     unscheduled,
+    spilled,
     changes: [],
     stats: {
       availableMinutes: totalMinutes(availability.free),
